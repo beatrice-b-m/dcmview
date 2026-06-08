@@ -100,6 +100,63 @@ async fn truncates_long_multibyte_tag_values_without_panicking() {
 	assert!(!preview.is_empty(), "truncated preview should keep visible content");
 }
 
+#[tokio::test]
+async fn limits_large_numeric_arrays_and_sequences() {
+	let dir = tempdir().expect("temp dir");
+	let path = dir.path().join("tags-limits.dcm");
+	write_limited_tag_fixture(&path);
+
+	let file = FileEntry {
+		index: 0,
+		path: path.clone(),
+		label: "limits fixture".to_string(),
+		has_pixels: false,
+		frame_count: 1,
+		rows: 0,
+		columns: 0,
+		transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
+		default_window: None,
+	};
+
+	let app = server::router(support::app_state(vec![file]));
+	let test_server = TestServer::new(app);
+	let response = test_server.get("/api/file/0/tags").await;
+	response.assert_status_ok();
+
+	let payload: Value = response.json();
+	let rows = payload.as_array().expect("tag list array");
+
+	let window_center_row = rows
+		.iter()
+		.find(|row| row["tag"] == "(0028,1050)")
+		.expect("WindowCenter row");
+	assert_eq!(window_center_row["value"]["type"], "numbers");
+	assert_eq!(
+		window_center_row["value"]["value"]
+			.as_array()
+			.expect("limited numeric values")
+			.len(),
+		128
+	);
+	assert_eq!(window_center_row["value"]["truncated"], true);
+	assert_eq!(window_center_row["value"]["total"], 150);
+
+	let sequence_row = rows
+		.iter()
+		.find(|row| row["tag"] == "(0008,2218)")
+		.expect("AnatomicRegionSequence row");
+	assert_eq!(sequence_row["value"]["type"], "sequence");
+	assert_eq!(
+		sequence_row["value"]["items"]
+			.as_array()
+			.expect("limited sequence items")
+			.len(),
+		64
+	);
+	assert_eq!(sequence_row["value"]["truncated"], true);
+	assert_eq!(sequence_row["value"]["total"], 70);
+}
+
 fn write_multibyte_tag_fixture(path: &std::path::Path) {
 	let long_text = "é".repeat(300);
 	let obj = InMemDicomObject::from_element_iter([
@@ -119,6 +176,44 @@ fn write_multibyte_tag_fixture(path: &std::path::Path) {
 	file_object
 		.write_to_file(path)
 		.expect("write multibyte tag fixture");
+}
+
+fn write_limited_tag_fixture(path: &std::path::Path) {
+	let numeric_values = (0..150)
+		.map(|value| value.to_string())
+		.collect::<Vec<_>>()
+		.join("\\");
+	let sequence_items = (0..70)
+		.map(|value| {
+			InMemDicomObject::from_element_iter([DataElement::new(
+				tags::CODE_VALUE,
+				VR::SH,
+				PrimitiveValue::from(format!("T-{value:05}")),
+			)])
+		})
+		.collect::<Vec<_>>();
+
+	let mut obj = InMemDicomObject::from_element_iter([
+		DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
+		DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, PrimitiveValue::from("2.25.444444444")),
+		DataElement::new(tags::WINDOW_CENTER, VR::DS, PrimitiveValue::from(numeric_values)),
+	]);
+
+	obj.put(DataElement::new(
+		tags::ANATOMIC_REGION_SEQUENCE,
+		VR::SQ,
+		DataSetSequence::from(sequence_items),
+	));
+
+	let file_object = obj
+		.with_meta(
+			FileMetaTableBuilder::new()
+				.transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+				.media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
+				.media_storage_sop_instance_uid("2.25.444444444"),
+		)
+		.expect("build limited tag meta table");
+	file_object.write_to_file(path).expect("write limited tag fixture");
 }
 
 fn write_tag_fixture(path: &std::path::Path) {

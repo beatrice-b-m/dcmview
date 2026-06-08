@@ -231,11 +231,11 @@
 			case "number":
 				return String(value.value);
 			case "numbers":
-				return value.value.join(", ");
+				return `${value.value.join(", ")}${truncatedSuffix(value.value.length, value.total, value.truncated)}`;
 			case "binary":
 				return `${value.length} bytes`;
 			case "sequence":
-				return `${value.items.length} item(s)`;
+				return `${value.items.length} item(s)${truncatedSuffix(value.items.length, value.total, value.truncated)}`;
 			case "error":
 				return value.message;
 		}
@@ -246,9 +246,9 @@
 			case "binary":
 				return `[binary: ${value.length} bytes]`;
 			case "sequence":
-				return `[sequence: ${value.items.length} item(s)]`;
+				return `[sequence: ${value.items.length} item(s)${truncatedSuffix(value.items.length, value.total, value.truncated)}]`;
 			case "numbers":
-				return value.value.join(", ");
+				return `${value.value.join(", ")}${truncatedSuffix(value.value.length, value.total, value.truncated)}`;
 			case "number":
 				return String(value.value);
 			case "string":
@@ -260,6 +260,13 @@
 
 	function isSequence(node: TagNode): boolean {
 		return node.value.type === "sequence";
+	}
+
+	function truncatedSuffix(visible: number, total?: number, truncated?: boolean): string {
+		if (!truncated) {
+			return "";
+		}
+		return total === undefined ? " (truncated)" : ` (first ${visible} of ${total})`;
 	}
 
 	function valueDisplay(row: FlatRow): string {

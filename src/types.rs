@@ -124,10 +124,26 @@ pub struct TagNode {
 pub enum TagValue {
 	String { value: String },
 	Number { value: f64 },
-	Numbers { value: Vec<f64> },
+	Numbers {
+		value: Vec<f64>,
+		#[serde(skip_serializing_if = "is_false")]
+		truncated: bool,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		total: Option<usize>,
+	},
 	Binary { length: usize },
-	Sequence { items: Vec<Vec<TagNode>> },
+	Sequence {
+		items: Vec<Vec<TagNode>>,
+		#[serde(skip_serializing_if = "is_false")]
+		truncated: bool,
+		#[serde(skip_serializing_if = "Option::is_none")]
+		total: Option<usize>,
+	},
 	Error { message: String },
+}
+
+fn is_false(value: &bool) -> bool {
+	!*value
 }
 
 #[derive(Debug, Clone)]

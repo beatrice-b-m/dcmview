@@ -42,9 +42,9 @@ export interface EmbedRoiAnnotations {
 export type TagValue =
 	| { type: "string"; value: string }
 	| { type: "number"; value: number }
-	| { type: "numbers"; value: number[] }
+	| { type: "numbers"; value: number[]; truncated?: boolean; total?: number }
 	| { type: "binary"; length: number }
-	| { type: "sequence"; items: TagNode[][] }
+	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
 	| { type: "error"; message: string };
 
 export interface TagNode {
