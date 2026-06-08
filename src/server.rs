@@ -1,19 +1,17 @@
 use crate::annotations::{AnnotationIndexMap, EmbedRoiAnnotations};
-use crate::pixels::{self, FrameRequest, RawFrameRequest};
+use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, RawFrameMetadata, TagNode, TagValue, TunnelInfo, WindowMode};
+use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo, WindowMode};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::{Json, Router};
-use bytes::Bytes;
 use dicom_core::dictionary::{DataDictionary, DataDictionaryEntry};
 use dicom_core::header::HasLength;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
-use lru::LruCache;
 use rust_embed::RustEmbed;
 use serde::Deserialize;
 use std::collections::HashMap;
@@ -25,8 +23,8 @@ use tokio::net::TcpListener;
 #[derive(Clone)]
 pub struct AppState {
 	pub files: Arc<Vec<FileEntry>>,
-	pub pixel_cache: Arc<Mutex<LruCache<crate::types::FrameCacheKey, Bytes>>>,
-	pub raw_cache: Arc<Mutex<LruCache<crate::types::RawFrameCacheKey, (Bytes, RawFrameMetadata)>>>,
+	pub pixel_cache: Arc<Mutex<FrameCache>>,
+	pub raw_cache: Arc<Mutex<RawFrameCache>>,
 	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
 	pub annotations: Arc<AnnotationIndexMap>,
 	pub tunnel_info: Option<Arc<TunnelInfo>>,
