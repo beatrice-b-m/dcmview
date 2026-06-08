@@ -219,16 +219,7 @@ async fn frame_handler(
 		},
 	)
 	.await
-	.map_err(|err| {
-		let message = err.to_string();
-		if message.contains("unsupported transfer syntax") {
-			ApiError::unprocessable(message)
-		} else if message.contains("no pixel data") || message.contains("frame out of range") {
-			ApiError::not_found(message)
-		} else {
-			ApiError::internal(format!("frame decode failed: {message}"))
-		}
-	})?;
+	.map_err(pixel_error_to_api_error)?;
 
 	let mut response = Response::new(axum::body::Body::from(frame_response.body));
 	let cache_header = if frame_response.cache_hit { "HIT" } else { "MISS" };
@@ -256,16 +247,7 @@ async fn raw_frame_handler(
 		},
 	)
 	.await
-	.map_err(|err| {
-		let message = err.to_string();
-		if message.contains("unsupported transfer syntax") {
-			ApiError::unprocessable(message)
-		} else if message.contains("no pixel data") || message.contains("frame out of range") {
-			ApiError::not_found(message)
-		} else {
-			ApiError::internal(format!("raw frame decode failed: {message}"))
-		}
-	})?;
+	.map_err(pixel_error_to_api_error)?;
 
 	let meta = &raw_response.metadata;
 	let cache_header = if raw_response.cache_hit { "HIT" } else { "MISS" };
@@ -575,6 +557,16 @@ impl ApiError {
 			status: StatusCode::INTERNAL_SERVER_ERROR,
 			message: message.into(),
 		}
+	}
+}
+
+fn pixel_error_to_api_error(error: pixels::PixelError) -> ApiError {
+	match error {
+		pixels::PixelError::FileIndexOutOfRange
+		| pixels::PixelError::NoPixelData
+		| pixels::PixelError::FrameOutOfRange => ApiError::not_found(error.to_string()),
+		pixels::PixelError::UnsupportedTransferSyntax(_) => ApiError::unprocessable(error.to_string()),
+		pixels::PixelError::Decode { .. } => ApiError::internal(error.to_string()),
 	}
 }
 

@@ -10,12 +10,49 @@ use std::io::Cursor;
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use thiserror::Error;
 use tokio::task;
 
 pub const CACHE_CAPACITY: usize = 128;
 pub const FRAME_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 pub const RAW_CACHE_CAPACITY: usize = 512;
 pub const RAW_CACHE_MAX_BYTES: usize = 384 * 1024 * 1024; // 384 MiB
+
+#[derive(Debug, Error)]
+pub enum PixelError {
+	#[error("file index out of range")]
+	FileIndexOutOfRange,
+	#[error("no pixel data")]
+	NoPixelData,
+	#[error("frame out of range")]
+	FrameOutOfRange,
+	#[error("unsupported transfer syntax: {0}")]
+	UnsupportedTransferSyntax(String),
+	#[error("{context}: {source}")]
+	Decode {
+		context: &'static str,
+		#[source]
+		source: anyhow::Error,
+	},
+}
+
+impl PixelError {
+	fn frame_decode(source: anyhow::Error) -> Self {
+		Self::Decode {
+			context: "frame decode failed",
+			source,
+		}
+	}
+
+	fn raw_decode(source: anyhow::Error) -> Self {
+		Self::Decode {
+			context: "raw frame decode failed",
+			source,
+		}
+	}
+}
+
+pub type PixelResult<T> = std::result::Result<T, PixelError>;
 
 pub fn new_cache() -> Arc<Mutex<LruCache<FrameCacheKey, Bytes>>> {
 	Arc::new(Mutex::new(LruCache::new(
@@ -110,16 +147,16 @@ pub async fn load_raw_frame(
 	files: &[FileEntry],
 	cache: Arc<Mutex<LruCache<RawFrameCacheKey, (Bytes, RawFrameMetadata)>>>,
 	request: RawFrameRequest,
-) -> Result<RawFrameResponse> {
+) -> PixelResult<RawFrameResponse> {
 	let file = files
 		.get(request.file_index)
-		.ok_or_else(|| anyhow!("file index out of range"))?;
+		.ok_or(PixelError::FileIndexOutOfRange)?;
 
 	if !file.has_pixels {
-		return Err(anyhow!("no pixel data"));
+		return Err(PixelError::NoPixelData);
 	}
 	if request.frame >= file.frame_count {
-		return Err(anyhow!("frame out of range"));
+		return Err(PixelError::FrameOutOfRange);
 	}
 
 	let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
@@ -127,7 +164,7 @@ pub async fn load_raw_frame(
 		syntax_class,
 		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported
 	) {
-		return Err(anyhow!("unsupported transfer syntax: {}", file.transfer_syntax_uid));
+		return Err(PixelError::UnsupportedTransferSyntax(file.transfer_syntax_uid.clone()));
 	}
 
 	let key = RawFrameCacheKey {
@@ -147,16 +184,24 @@ pub async fn load_raw_frame(
 
 	let (body, metadata) = match syntax_class {
 		TransferSyntaxClass::Jpeg => {
-			read_raw_jpeg_samples(file.path.clone(), request.frame, file.default_window).await?
+			read_raw_jpeg_samples(file.path.clone(), request.frame, file.default_window)
+				.await
+				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::JpegLossless => {
-			decode_raw_jpeg_lossless(file.path.clone(), request.frame, file.default_window).await?
+			decode_raw_jpeg_lossless(file.path.clone(), request.frame, file.default_window)
+				.await
+				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::Jpeg2000 => {
-			decode_raw_jp2_samples(file.path.clone(), request.frame, file.default_window).await?
+			decode_raw_jp2_samples(file.path.clone(), request.frame, file.default_window)
+				.await
+				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::Uncompressed => {
-			read_raw_uncompressed(file.path.clone(), request.frame, file.default_window).await?
+			read_raw_uncompressed(file.path.clone(), request.frame, file.default_window)
+				.await
+				.map_err(PixelError::raw_decode)?
 		}
 		_ => unreachable!("non-raw syntaxes filtered above"),
 	};
@@ -193,16 +238,16 @@ pub async fn load_frame(
 	files: &[FileEntry],
 	cache: Arc<Mutex<LruCache<FrameCacheKey, Bytes>>>,
 	request: FrameRequest,
- ) -> Result<FrameResponse> {
+) -> PixelResult<FrameResponse> {
 	let file = files
 		.get(request.file_index)
-		.ok_or_else(|| anyhow!("file index out of range"))?;
+		.ok_or(PixelError::FileIndexOutOfRange)?;
 
 	if !file.has_pixels {
-		return Err(anyhow!("no pixel data"));
+		return Err(PixelError::NoPixelData);
 	}
 	if request.frame >= file.frame_count {
-		return Err(anyhow!("frame out of range"));
+		return Err(PixelError::FrameOutOfRange);
 	}
 
 	let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
@@ -226,11 +271,15 @@ pub async fn load_frame(
 
 	let (body, content_type) = match syntax_class {
 		TransferSyntaxClass::Jpeg => (
-			decode_frame_to_png(file.path.clone(), request.frame).await?,
+			decode_frame_to_png(file.path.clone(), request.frame)
+				.await
+				.map_err(PixelError::frame_decode)?,
 			"image/png",
 		),
 		TransferSyntaxClass::JpegLossless => (
-			decode_frame_to_png(file.path.clone(), request.frame).await?,
+			decode_frame_to_png(file.path.clone(), request.frame)
+				.await
+				.map_err(PixelError::frame_decode)?,
 			"image/png",
 		),
 		TransferSyntaxClass::Jpeg2000 => (
@@ -242,7 +291,8 @@ pub async fn load_frame(
 				file.default_window,
 				request.window_mode,
 			)
-			.await?,
+			.await
+			.map_err(PixelError::frame_decode)?,
 			"image/png",
 		),
 		TransferSyntaxClass::Uncompressed => (
@@ -254,14 +304,12 @@ pub async fn load_frame(
 				file.default_window,
 				request.window_mode,
 			)
-			.await?,
+			.await
+			.map_err(PixelError::frame_decode)?,
 			"image/png",
 		),
 		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
-			return Err(anyhow!(
-				"unsupported transfer syntax: {}",
-				file.transfer_syntax_uid
-			));
+			return Err(PixelError::UnsupportedTransferSyntax(file.transfer_syntax_uid.clone()));
 		}
 	};
 
