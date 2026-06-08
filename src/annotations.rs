@@ -1,11 +1,12 @@
 use crate::types::FileEntry;
 use anyhow::{anyhow, bail, Context, Result};
 use csv::{ReaderBuilder, StringRecord};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Component, Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub struct EmbedRoiAnnotations {
 	pub num_roi: usize,
 	pub roi_coords: Vec<[u32; 4]>,
@@ -30,6 +31,75 @@ struct ParsedAnnotationRow {
 }
 
 pub type AnnotationIndexMap = HashMap<usize, EmbedRoiAnnotations>;
+
+#[derive(Debug, Clone)]
+pub struct AnnotationStore {
+	inner: Arc<Mutex<AnnotationIndexMap>>,
+}
+
+impl AnnotationStore {
+	pub fn new(annotations: AnnotationIndexMap) -> Self {
+		Self {
+			inner: Arc::new(Mutex::new(annotations)),
+		}
+	}
+
+	pub fn empty() -> Self {
+		Self::new(HashMap::new())
+	}
+
+	pub fn get(&self, file_index: usize) -> Result<EmbedRoiAnnotations> {
+		let annotations = self
+			.inner
+			.lock()
+			.map_err(|_| anyhow!("annotations store lock poisoned"))?;
+		Ok(annotations
+			.get(&file_index)
+			.cloned()
+			.unwrap_or_else(EmbedRoiAnnotations::empty))
+	}
+
+	pub fn replace_for_file(&self, file: &FileEntry, annotations: EmbedRoiAnnotations) -> Result<EmbedRoiAnnotations> {
+		let canonical = canonicalize_annotations(annotations, file.rows, file.columns, file.frame_count)?;
+		let mut store = self
+			.inner
+			.lock()
+			.map_err(|_| anyhow!("annotations store lock poisoned"))?;
+		if canonical.num_roi == 0 {
+			store.remove(&file.index);
+		} else {
+			store.insert(file.index, canonical.clone());
+		}
+		Ok(canonical)
+	}
+
+	pub fn export_embed_csv(&self, files: &[FileEntry]) -> Result<String> {
+		let store = self
+			.inner
+			.lock()
+			.map_err(|_| anyhow!("annotations store lock poisoned"))?;
+		let mut writer = csv::Writer::from_writer(Vec::new());
+		writer.write_record(["anon_dicom_path", "num_ROI", "ROI_coords", "ROI_frames"])?;
+
+		for file in files {
+			let Some(annotations) = store.get(&file.index) else {
+				continue;
+			};
+			if annotations.num_roi == 0 {
+				continue;
+			}
+			writer.write_record([
+				file.path.to_string_lossy().into_owned(),
+				annotations.num_roi.to_string(),
+				serde_json::to_string(&annotations.roi_coords)?,
+				serde_json::to_string(&annotations.roi_frames)?,
+			])?;
+		}
+
+		let bytes = writer.into_inner().map_err(|error| error.into_error())?;
+		String::from_utf8(bytes).context("annotations CSV export was not valid UTF-8")
+	}
+}
 
 struct ColumnIndexes {
 	path: usize,
@@ -230,6 +300,66 @@ fn validate_frames_in_range(annotations: &EmbedRoiAnnotations, frame_count: u32,
 	Ok(())
 }
 
+pub fn canonicalize_annotations(
+	annotations: EmbedRoiAnnotations,
+	rows: u32,
+	columns: u32,
+	frame_count: u32,
+) -> Result<EmbedRoiAnnotations> {
+	if rows == 0 || columns == 0 {
+		bail!("annotations cannot be edited for files without image dimensions");
+	}
+
+	let mut roi_coords = Vec::with_capacity(annotations.roi_coords.len());
+	for (idx, [ymin, xmin, ymax, xmax]) in annotations.roi_coords.into_iter().enumerate() {
+		let y0 = ymin.min(ymax);
+		let y1 = ymin.max(ymax);
+		let x0 = xmin.min(xmax);
+		let x1 = xmin.max(xmax);
+
+		if y0 == y1 || x0 == x1 {
+			bail!("ROI_coords[{idx}] must describe a non-empty rectangle");
+		}
+		if y1 > rows || x1 > columns {
+			bail!(
+				"ROI_coords[{idx}] exceeds image bounds: [{y0}, {x0}, {y1}, {x1}] outside {rows}x{columns}"
+			);
+		}
+
+		roi_coords.push([y0, x0, y1, x1]);
+	}
+
+	let num_roi = roi_coords.len();
+	let roi_frames = if annotations.roi_frames.is_empty() {
+		Vec::new()
+	} else {
+		if annotations.roi_frames.len() != num_roi {
+			bail!(
+				"len(ROI_frames) must equal ROI count when ROI_frames is not empty ({} != {})",
+				annotations.roi_frames.len(),
+				num_roi
+			);
+		}
+		for (roi_idx, frames) in annotations.roi_frames.iter().enumerate() {
+			for frame in frames {
+				if *frame >= frame_count {
+					bail!(
+						"ROI_frames[{roi_idx}] contains frame {frame}, but DICOM has {} frame(s)",
+						frame_count
+					);
+				}
+			}
+		}
+		annotations.roi_frames
+	};
+
+	Ok(EmbedRoiAnnotations {
+		num_roi,
+		roi_coords,
+		roi_frames,
+	})
+}
+
 fn normalize_path(path: &Path) -> String {
 	let mut normalized = PathBuf::new();
 	for component in path.components() {
@@ -248,8 +378,9 @@ fn normalize_path(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{load_annotations_for_files, EmbedRoiAnnotations};
+	use super::{canonicalize_annotations, load_annotations_for_files, AnnotationStore, EmbedRoiAnnotations};
 	use crate::types::FileEntry;
+	use std::collections::HashMap;
 	use std::fs;
 	use std::path::{Path, PathBuf};
 	use tempfile::tempdir;
@@ -416,6 +547,57 @@ mod tests {
 
 		let error = load_annotations_for_files(&csv_path, &[]).expect_err("duplicate path should fail");
 		assert!(error.to_string().contains("duplicate anon_dicom_path"));
+	}
+
+	#[test]
+	fn canonicalizes_coords_and_derives_roi_count() {
+		let annotations = EmbedRoiAnnotations {
+			num_roi: 99,
+			roi_coords: vec![[30, 40, 10, 20]],
+			roi_frames: vec![vec![0, 1]],
+		};
+
+		let canonical = canonicalize_annotations(annotations, 100, 100, 2).expect("canonical annotations");
+
+		assert_eq!(
+			canonical,
+			EmbedRoiAnnotations {
+				num_roi: 1,
+				roi_coords: vec![[10, 20, 30, 40]],
+				roi_frames: vec![vec![0, 1]],
+			}
+		);
+	}
+
+	#[test]
+	fn rejects_edit_coords_outside_image_bounds() {
+		let annotations = EmbedRoiAnnotations {
+			num_roi: 1,
+			roi_coords: vec![[0, 0, 2, 1]],
+			roi_frames: vec![],
+		};
+
+		let error = canonicalize_annotations(annotations, 1, 1, 1).expect_err("bounds should fail");
+
+		assert!(error.to_string().contains("exceeds image bounds"));
+	}
+
+	#[test]
+	fn exports_embed_csv_with_json_quoted_columns() {
+		let file = file_entry(0, PathBuf::from("/tmp/exported.dcm"), 3);
+		let store = AnnotationStore::new(HashMap::from([(
+			0,
+			EmbedRoiAnnotations {
+				num_roi: 1,
+				roi_coords: vec![[1, 2, 3, 4]],
+				roi_frames: vec![vec![1, 2]],
+			},
+		)]));
+
+		let csv = store.export_embed_csv(&[file]).expect("export csv");
+
+		assert!(csv.contains("anon_dicom_path,num_ROI,ROI_coords,ROI_frames"));
+		assert!(csv.contains("/tmp/exported.dcm,1,\"[[1,2,3,4]]\",\"[[1,2]]\""));
 	}
 
 	fn file_entry(index: usize, path: PathBuf, frame_count: u32) -> FileEntry {

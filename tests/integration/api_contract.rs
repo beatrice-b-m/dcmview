@@ -1,12 +1,11 @@
 use super::support;
 use axum::http::header;
 use axum_test::TestServer;
-use dcmview::annotations::EmbedRoiAnnotations;
+use dcmview::annotations::{AnnotationStore, EmbedRoiAnnotations};
 use dcmview::server;
 use dcmview::types::WindowPreset;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -32,7 +31,7 @@ async fn json_endpoints_match_frontend_contract_shapes() {
     });
 
     let mut state = support::app_state(vec![entry]);
-    state.annotations = Arc::new(HashMap::from([(
+    state.annotations = AnnotationStore::new(HashMap::from([(
         0,
         EmbedRoiAnnotations {
             num_roi: 1,

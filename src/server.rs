@@ -1,4 +1,4 @@
-use crate::annotations::{AnnotationIndexMap, EmbedRoiAnnotations};
+use crate::annotations::{AnnotationStore, EmbedRoiAnnotations};
 use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
 use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo, WindowMode};
@@ -27,7 +27,7 @@ pub struct AppState {
 	pub pixel_cache: Arc<Mutex<FrameCache>>,
 	pub raw_cache: Arc<Mutex<RawFrameCache>>,
 	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
-	pub annotations: Arc<AnnotationIndexMap>,
+	pub annotations: AnnotationStore,
 	pub tunnel_info: Option<Arc<TunnelInfo>>,
 	pub tunnel_handle: Option<Arc<TunnelHandle>>,
 	pub server_start: Instant,
@@ -147,7 +147,8 @@ pub fn router(state: AppState) -> Router {
 		.route("/api/file/{index}/info", get(info_handler))
 		.route("/api/file/{index}/frame/{frame}", get(frame_handler))
 		.route("/api/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
-		.route("/api/file/{index}/annotations", get(annotations_handler))
+		.route("/api/file/{index}/annotations", get(annotations_handler).put(update_annotations_handler))
+		.route("/api/annotations/export.csv", get(export_annotations_handler))
 		.route("/api/file/{index}/tags", get(tags_handler))
 		.with_state(state)
 }
@@ -189,11 +190,45 @@ async fn annotations_handler(
 
 	let annotations = state
 		.annotations
-		.get(&index)
-		.cloned()
-		.unwrap_or_else(EmbedRoiAnnotations::empty);
+		.get(index)
+		.map_err(|error| ApiError::internal(error.to_string()))?;
 
 	Ok(Json(annotations))
+}
+
+async fn update_annotations_handler(
+	State(state): State<AppState>,
+	Path(index): Path<usize>,
+	Json(annotations): Json<EmbedRoiAnnotations>,
+) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
+	touch_request(&state);
+	let file = state
+		.files
+		.get(index)
+		.ok_or_else(|| ApiError::not_found("file index out of range"))?;
+
+	let canonical = state
+		.annotations
+		.replace_for_file(file, annotations)
+		.map_err(|error| ApiError::bad_request(error.to_string()))?;
+
+	Ok(Json(canonical))
+}
+
+async fn export_annotations_handler(State(state): State<AppState>) -> Result<Response, ApiError> {
+	touch_request(&state);
+	let csv = state
+		.annotations
+		.export_embed_csv(state.files.as_slice())
+		.map_err(|error| ApiError::internal(error.to_string()))?;
+	let mut response = Response::new(axum::body::Body::from(csv));
+	let headers = response.headers_mut();
+	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"));
+	headers.insert(
+		header::CONTENT_DISPOSITION,
+		HeaderValue::from_static("attachment; filename=\"dcmview-annotations.csv\""),
+	);
+	Ok(response)
 }
 
 async fn frame_handler(
@@ -582,6 +617,13 @@ struct ApiError {
 }
 
 impl ApiError {
+	fn bad_request(message: impl Into<String>) -> Self {
+		Self {
+			status: StatusCode::BAD_REQUEST,
+			message: message.into(),
+		}
+	}
+
 	fn not_found(message: impl Into<String>) -> Self {
 		Self {
 			status: StatusCode::NOT_FOUND,

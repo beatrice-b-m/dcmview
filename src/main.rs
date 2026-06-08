@@ -96,7 +96,7 @@ async fn run() -> Result<()> {
 		pixel_cache: pixels::new_cache(),
 		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),
-		annotations: Arc::new(annotations),
+			annotations: annotations::AnnotationStore::new(annotations),
 		tunnel_info: None,
 		tunnel_handle: None,
 		server_start: Instant::now(),

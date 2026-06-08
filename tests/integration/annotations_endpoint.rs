@@ -1,11 +1,10 @@
 use super::support;
 use axum_test::TestServer;
-use dcmview::annotations::{self, EmbedRoiAnnotations};
+use dcmview::annotations::{self, AnnotationStore, EmbedRoiAnnotations};
 use dcmview::server;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::sync::Arc;
 use tempfile::tempdir;
 
 #[tokio::test]
@@ -17,7 +16,7 @@ async fn returns_annotations_for_matching_file_index() {
         10,
     );
     let mut state = support::app_state(vec![entry]);
-    state.annotations = Arc::new(HashMap::from([(
+    state.annotations = AnnotationStore::new(HashMap::from([(
         0,
         EmbedRoiAnnotations {
             num_roi: 2,
@@ -103,7 +102,7 @@ async fn serves_annotations_loaded_from_csv_for_matching_file() {
     );
 
     let mut state = support::app_state(vec![entry]);
-    state.annotations = Arc::new(annotation_map);
+    state.annotations = AnnotationStore::new(annotation_map);
 
     let app = server::router(state);
     let test_server = TestServer::new(app);
@@ -115,4 +114,108 @@ async fn serves_annotations_loaded_from_csv_for_matching_file() {
     assert_eq!(body["num_roi"], 1, "expected 1 ROI from CSV");
     assert_eq!(body["roi_coords"][0], serde_json::json!([10, 20, 30, 40]));
     assert_eq!(body["roi_frames"][0], serde_json::json!([0]));
+}
+
+#[tokio::test]
+async fn put_replaces_annotations_and_canonicalizes_payload() {
+    let dir = tempdir().expect("temp dir");
+    let mut entry = support::file_entry(
+        dir.path().join("editable.dcm"),
+        "1.2.840.10008.1.2.4.50",
+        4,
+    );
+    entry.rows = 100;
+    entry.columns = 120;
+    let app = server::router(support::app_state(vec![entry]));
+    let test_server = TestServer::new(app);
+
+    let response = test_server
+        .put("/api/file/0/annotations")
+        .json(&EmbedRoiAnnotations {
+            num_roi: 99,
+            roi_coords: vec![[30, 40, 10, 20]],
+            roi_frames: vec![vec![0, 3]],
+        })
+        .await;
+    response.assert_status_ok();
+    let body: Value = response.json();
+    assert_eq!(body["num_roi"], 1);
+    assert_eq!(body["roi_coords"][0], serde_json::json!([10, 20, 30, 40]));
+    assert_eq!(body["roi_frames"][0], serde_json::json!([0, 3]));
+
+    let get_response = test_server.get("/api/file/0/annotations").await;
+    get_response.assert_status_ok();
+    let get_body: Value = get_response.json();
+    assert_eq!(get_body["num_roi"], 1);
+    assert_eq!(get_body["roi_coords"][0], serde_json::json!([10, 20, 30, 40]));
+}
+
+#[tokio::test]
+async fn put_rejects_out_of_bounds_coords_and_frames() {
+    let dir = tempdir().expect("temp dir");
+    let mut entry = support::file_entry(
+        dir.path().join("editable.dcm"),
+        "1.2.840.10008.1.2.4.50",
+        2,
+    );
+    entry.rows = 16;
+    entry.columns = 16;
+    let app = server::router(support::app_state(vec![entry]));
+    let test_server = TestServer::new(app);
+
+    let bounds_response = test_server
+        .put("/api/file/0/annotations")
+        .json(&EmbedRoiAnnotations {
+            num_roi: 1,
+            roi_coords: vec![[0, 0, 17, 5]],
+            roi_frames: vec![vec![0]],
+        })
+        .await;
+    bounds_response.assert_status_bad_request();
+    let bounds_body: Value = bounds_response.json();
+    assert!(bounds_body["error"].as_str().unwrap_or_default().contains("exceeds image bounds"));
+
+    let frame_response = test_server
+        .put("/api/file/0/annotations")
+        .json(&EmbedRoiAnnotations {
+            num_roi: 1,
+            roi_coords: vec![[0, 0, 8, 8]],
+            roi_frames: vec![vec![2]],
+        })
+        .await;
+    frame_response.assert_status_bad_request();
+    let frame_body: Value = frame_response.json();
+    assert!(frame_body["error"].as_str().unwrap_or_default().contains("contains frame 2"));
+}
+
+#[tokio::test]
+async fn export_csv_returns_current_in_memory_annotations() {
+    let dir = tempdir().expect("temp dir");
+    let mut entry = support::file_entry(
+        dir.path().join("exported.dcm"),
+        "1.2.840.10008.1.2.4.50",
+        3,
+    );
+    entry.rows = 64;
+    entry.columns = 64;
+    let app = server::router(support::app_state(vec![entry]));
+    let test_server = TestServer::new(app);
+
+    test_server
+        .put("/api/file/0/annotations")
+        .json(&EmbedRoiAnnotations {
+            num_roi: 1,
+            roi_coords: vec![[1, 2, 3, 4]],
+            roi_frames: vec![vec![1, 2]],
+        })
+        .await
+        .assert_status_ok();
+
+    let response = test_server.get("/api/annotations/export.csv").await;
+    response.assert_status_ok();
+    let body = response.text();
+    assert!(body.contains("anon_dicom_path,num_ROI,ROI_coords,ROI_frames"));
+    assert!(body.contains("exported.dcm"));
+    assert!(body.contains("\"[[1,2,3,4]]\""));
+    assert!(body.contains("\"[[1,2]]\""));
 }

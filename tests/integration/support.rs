@@ -1,3 +1,4 @@
+use dcmview::annotations::AnnotationStore;
 use dcmview::pixels;
 use dcmview::server::{now_unix_ms, AppState};
 use dcmview::types::FileEntry;
@@ -92,7 +93,7 @@ pub fn app_state(files: Vec<FileEntry>) -> AppState {
 		pixel_cache: pixels::new_cache(),
 		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),
-		annotations: Arc::new(HashMap::new()),
+		annotations: AnnotationStore::empty(),
 		tunnel_info: None,
 		tunnel_handle: None,
 		server_start: Instant::now(),
