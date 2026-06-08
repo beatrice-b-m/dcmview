@@ -427,6 +427,12 @@ mod tests {
 			frame_count,
 			rows: 1,
 			columns: 1,
+			bits_allocated: 8,
+			pixel_representation: 0,
+			samples_per_pixel: 1,
+			photometric_interpretation: "MONOCHROME2".to_string(),
+			rescale_slope: 1.0,
+			rescale_intercept: 0.0,
 			transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
 			default_window: None,
 		}

@@ -103,6 +103,13 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
 	let frame_count = read_u32(&obj, "NumberOfFrames").unwrap_or(1);
 	let rows = read_u32(&obj, "Rows").unwrap_or(0);
 	let columns = read_u32(&obj, "Columns").unwrap_or(0);
+	let bits_allocated = read_u32(&obj, "BitsAllocated").unwrap_or(8);
+	let pixel_representation = read_u32(&obj, "PixelRepresentation").unwrap_or(0);
+	let samples_per_pixel = read_u32(&obj, "SamplesPerPixel").unwrap_or(1).max(1);
+	let photometric_interpretation =
+		read_str(&obj, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
+	let rescale_slope = read_f64(&obj, "RescaleSlope").unwrap_or(1.0);
+	let rescale_intercept = read_f64(&obj, "RescaleIntercept").unwrap_or(0.0);
 	let has_pixels = obj.element_by_name("PixelData").is_ok();
 	let default_window = match (read_f64(&obj, "WindowCenter"), read_f64(&obj, "WindowWidth")) {
 		(Some(center), Some(width)) => Some(WindowPreset { center, width }),
@@ -124,6 +131,12 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
 		frame_count,
 		rows,
 		columns,
+		bits_allocated,
+		pixel_representation,
+		samples_per_pixel,
+		photometric_interpretation,
+		rescale_slope,
+		rescale_intercept,
 		transfer_syntax_uid,
 		default_window,
 	}))

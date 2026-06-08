@@ -16,8 +16,37 @@ pub struct FileEntry {
 	pub frame_count: u32,
 	pub rows: u32,
 	pub columns: u32,
+	pub bits_allocated: u32,
+	pub pixel_representation: u32,
+	pub samples_per_pixel: u32,
+	pub photometric_interpretation: String,
+	pub rescale_slope: f64,
+	pub rescale_intercept: f64,
 	pub transfer_syntax_uid: String,
 	pub default_window: Option<WindowPreset>,
+}
+
+impl FileEntry {
+	pub fn raw_metadata(
+		&self,
+		rows: u32,
+		columns: u32,
+		bits_allocated: u32,
+		samples_per_pixel: u32,
+	) -> RawFrameMetadata {
+		RawFrameMetadata {
+			rows,
+			columns,
+			bits_allocated,
+			pixel_representation: self.pixel_representation,
+			samples_per_pixel,
+			photometric_interpretation: self.photometric_interpretation.clone(),
+			rescale_slope: self.rescale_slope,
+			rescale_intercept: self.rescale_intercept,
+			default_wc: self.default_window.map(|window| window.center),
+			default_ww: self.default_window.map(|window| window.width),
+		}
+	}
 }
 
 #[derive(Debug, Clone, Serialize)]

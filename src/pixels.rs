@@ -200,22 +200,22 @@ pub async fn load_raw_frame(
 
 	let (body, metadata) = match syntax_class {
 		TransferSyntaxClass::Jpeg => {
-			read_raw_jpeg_samples(file.path.clone(), request.frame, file.default_window)
+			read_raw_jpeg_samples(file.clone(), request.frame)
 				.await
 				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::JpegLossless => {
-			decode_raw_jpeg_lossless(file.path.clone(), request.frame, file.default_window)
+			decode_raw_jpeg_lossless(file.clone(), request.frame)
 				.await
 				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::Jpeg2000 => {
-			decode_raw_jp2_samples(file.path.clone(), request.frame, file.default_window)
+			decode_raw_jp2_samples(file.clone(), request.frame)
 				.await
 				.map_err(PixelError::raw_decode)?
 		}
 		TransferSyntaxClass::Uncompressed => {
-			read_raw_uncompressed(file.path.clone(), request.frame, file.default_window)
+			read_raw_uncompressed(file.clone(), request.frame)
 				.await
 				.map_err(PixelError::raw_decode)?
 		}
@@ -313,11 +313,10 @@ pub async fn load_frame(
 		),
 		TransferSyntaxClass::Uncompressed => (
 			decode_uncompressed_to_png(
-				file.path.clone(),
+				file.clone(),
 				request.frame,
 				request.window_center,
 				request.window_width,
-				file.default_window,
 				request.window_mode,
 			)
 			.await
@@ -474,20 +473,18 @@ fn decode_frame_to_png_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
 }
 
 async fn decode_uncompressed_to_png(
-	path: PathBuf,
+	file: FileEntry,
 	frame: u32,
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
-	default_window: Option<crate::types::WindowPreset>,
 	window_mode: WindowMode,
 ) -> Result<Bytes> {
 	task::spawn_blocking(move || {
 		decode_uncompressed_to_png_blocking(
-			&path,
+			&file,
 			frame,
 			requested_wc,
 			requested_ww,
-			default_window,
 			window_mode,
 		)
 	})
@@ -496,24 +493,19 @@ async fn decode_uncompressed_to_png(
 }
 
 fn decode_uncompressed_to_png_blocking(
-	path: &PathBuf,
+	file: &FileEntry,
 	frame: u32,
 	requested_wc: Option<f64>,
 	requested_ww: Option<f64>,
-	default_window: Option<crate::types::WindowPreset>,
 	window_mode: WindowMode,
 ) -> Result<Bytes> {
-	let object = open_file(path)
-		.with_context(|| format!("failed to open DICOM for uncompressed decode: {}", path.display()))?;
+	let object = open_file(&file.path)
+		.with_context(|| format!("failed to open DICOM for uncompressed decode: {}", file.path.display()))?;
 
-	let rows = read_u32_tag(&object, "Rows").unwrap_or(0);
-	let columns = read_u32_tag(&object, "Columns").unwrap_or(0);
-	let samples_per_pixel = read_u32_tag(&object, "SamplesPerPixel").unwrap_or(1).max(1);
-	let bits_allocated = read_u32_tag(&object, "BitsAllocated").unwrap_or(8);
-	let pixel_representation = read_u32_tag(&object, "PixelRepresentation").unwrap_or(0);
-	let slope = read_f64_tag(&object, "RescaleSlope").unwrap_or(1.0);
-	let intercept = read_f64_tag(&object, "RescaleIntercept").unwrap_or(0.0);
-
+	let rows = file.rows;
+	let columns = file.columns;
+	let samples_per_pixel = file.samples_per_pixel.max(1);
+	let bits_allocated = file.bits_allocated;
 	let bytes_per_sample = (bits_allocated / 8) as usize;
 	if rows == 0 || columns == 0 || bytes_per_sample == 0 {
 		return Err(anyhow!("frame decode failed: invalid image geometry"));
@@ -537,13 +529,13 @@ fn decode_uncompressed_to_png_blocking(
 	}
 
 	let frame_slice = &pixel_bytes[offset..offset + frame_size];
-	let signed = pixel_representation == 1;
+	let signed = file.pixel_representation == 1;
 	// dicom-object normalizes primitive pixel bytes to host order for native pixel data.
 	// Decode from the normalized byte representation directly.
 	let raw_samples = decode_numeric_samples(frame_slice, bits_allocated, signed, false)?;
 	let rescaled: Vec<f64> = raw_samples
 		.into_iter()
-		.map(|value| value * slope + intercept)
+		.map(|value| value * file.rescale_slope + file.rescale_intercept)
 		.collect();
 
 	let luminance_samples = if samples_per_pixel > 1 {
@@ -555,7 +547,7 @@ fn decode_uncompressed_to_png_blocking(
 		rescaled
 	};
 
-	let resolved_window = resolve_window_with_mode(window_mode, requested_wc, requested_ww, default_window, &luminance_samples)
+	let resolved_window = resolve_window_with_mode(window_mode, requested_wc, requested_ww, file.default_window, &luminance_samples)
 		.ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
 	let windowed = apply_window(
 		&luminance_samples,
@@ -612,63 +604,26 @@ fn decode_numeric_samples(
 	}
 }
 
-fn read_u32_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option<u32> {
-	object
-		.element_by_name(name)
-		.ok()?
-		.to_str()
-		.ok()
-		.and_then(|value| value.split('\\').next().map(str::trim).map(str::to_string))
-		.and_then(|value| value.parse::<u32>().ok())
-}
-
-fn read_f64_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option<f64> {
-	object
-		.element_by_name(name)
-		.ok()?
-		.to_str()
-		.ok()
-		.and_then(|value| value.split('\\').next().map(str::trim).map(str::to_string))
-		.and_then(|value| value.parse::<f64>().ok())
-}
-
-fn read_str_tag(object: &dicom_object::DefaultDicomObject, name: &str) -> Option<String> {
-	object
-		.element_by_name(name)
-		.ok()?
-		.to_str()
-		.ok()
-		.map(|v| v.trim().to_string())
-}
-
 async fn read_raw_uncompressed(
-	path: PathBuf,
+	file: FileEntry,
 	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
 ) -> Result<(Bytes, RawFrameMetadata)> {
-	task::spawn_blocking(move || read_raw_uncompressed_blocking(&path, frame, default_window))
+	task::spawn_blocking(move || read_raw_uncompressed_blocking(&file, frame))
 		.await
 		.context("raw uncompressed read task failed")?
 }
 
 fn read_raw_uncompressed_blocking(
-	path: &PathBuf,
+	file: &FileEntry,
 	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
 ) -> Result<(Bytes, RawFrameMetadata)> {
-	let object = open_file(path)
-		.with_context(|| format!("failed to open DICOM for raw uncompressed read: {}", path.display()))?;
+	let object = open_file(&file.path)
+		.with_context(|| format!("failed to open DICOM for raw uncompressed read: {}", file.path.display()))?;
 
-	let rows = read_u32_tag(&object, "Rows").unwrap_or(0);
-	let columns = read_u32_tag(&object, "Columns").unwrap_or(0);
-	let samples_per_pixel = read_u32_tag(&object, "SamplesPerPixel").unwrap_or(1).max(1);
-	let bits_allocated = read_u32_tag(&object, "BitsAllocated").unwrap_or(8);
-	let pixel_representation = read_u32_tag(&object, "PixelRepresentation").unwrap_or(0);
-	let photometric_interpretation =
-		read_str_tag(&object, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
-	let slope = read_f64_tag(&object, "RescaleSlope").unwrap_or(1.0);
-	let intercept = read_f64_tag(&object, "RescaleIntercept").unwrap_or(0.0);
-
+	let rows = file.rows;
+	let columns = file.columns;
+	let samples_per_pixel = file.samples_per_pixel.max(1);
+	let bits_allocated = file.bits_allocated;
 	let bytes_per_sample = (bits_allocated / 8).max(1) as usize;
 	if rows == 0 || columns == 0 {
 		return Err(anyhow!("frame decode failed: invalid image geometry"));
@@ -690,37 +645,18 @@ fn read_raw_uncompressed_blocking(
 	// dicom-object normalizes pixel bytes to host (LE) order — slice is already LE.
 	let frame_bytes = pixel_bytes[offset..offset + frame_size].to_vec();
 
-	let metadata = RawFrameMetadata {
-		rows,
-		columns,
-		bits_allocated,
-		pixel_representation,
-		samples_per_pixel,
-		photometric_interpretation,
-		rescale_slope: slope,
-		rescale_intercept: intercept,
-		default_wc: default_window.map(|w| w.center),
-		default_ww: default_window.map(|w| w.width),
-	};
+	let metadata = file.raw_metadata(rows, columns, bits_allocated, samples_per_pixel);
 	Ok((Bytes::from(frame_bytes), metadata))
 }
 
-async fn read_raw_jpeg_samples(
-	path: PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	task::spawn_blocking(move || read_raw_jpeg_samples_blocking(&path, frame, default_window))
+async fn read_raw_jpeg_samples(file: FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	task::spawn_blocking(move || read_raw_jpeg_samples_blocking(&file, frame))
 		.await
 		.context("raw JPEG sample read task failed")?
 }
 
-fn read_raw_jpeg_samples_blocking(
-	path: &PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	let fragment = read_encapsulated_fragment_blocking(path, frame)?;
+fn read_raw_jpeg_samples_blocking(file: &FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
 	// Decode JPEG to 8-bit grayscale samples. Tolerates Baseline and Extended JPEG.
 	let img = image::load_from_memory(&fragment)
 		.context("JPEG decode failed for raw samples")?
@@ -728,52 +664,19 @@ fn read_raw_jpeg_samples_blocking(
 	let (columns, rows) = (img.width(), img.height());
 	let samples = img.into_raw();
 
-	// Read metadata tags for context (photometric, rescale, etc.).
-	let object = open_file(path)
-		.with_context(|| format!("failed to open DICOM for raw JPEG metadata: {}", path.display()))?;
-	let photometric_interpretation =
-		read_str_tag(&object, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
-	let slope = read_f64_tag(&object, "RescaleSlope").unwrap_or(1.0);
-	let intercept = read_f64_tag(&object, "RescaleIntercept").unwrap_or(0.0);
-
-	let metadata = RawFrameMetadata {
-		rows,
-		columns,
-		bits_allocated: 8,
-		pixel_representation: 0,
-		samples_per_pixel: 1,
-		photometric_interpretation,
-		rescale_slope: slope,
-		rescale_intercept: intercept,
-		default_wc: default_window.map(|w| w.center),
-		default_ww: default_window.map(|w| w.width),
-	};
+	let metadata = file.raw_metadata(rows, columns, 8, 1);
 	Ok((Bytes::from(samples), metadata))
 }
 
-async fn decode_raw_jpeg_lossless(
-	path: PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	task::spawn_blocking(move || decode_raw_jpeg_lossless_blocking(&path, frame, default_window))
+async fn decode_raw_jpeg_lossless(file: FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	task::spawn_blocking(move || decode_raw_jpeg_lossless_blocking(&file, frame))
 		.await
 		.context("raw JPEG Lossless decode task failed")?
 }
 
-fn decode_raw_jpeg_lossless_blocking(
-	path: &PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	let obj = open_file(path)
-		.with_context(|| format!("failed to open DICOM for raw JPEG Lossless decode: {}", path.display()))?;
-
-	let photometric =
-		read_str_tag(&obj, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
-	let pixel_representation = read_u32_tag(&obj, "PixelRepresentation").unwrap_or(0);
-	let slope = read_f64_tag(&obj, "RescaleSlope").unwrap_or(1.0);
-	let intercept = read_f64_tag(&obj, "RescaleIntercept").unwrap_or(0.0);
+fn decode_raw_jpeg_lossless_blocking(file: &FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	let obj = open_file(&file.path)
+		.with_context(|| format!("failed to open DICOM for raw JPEG Lossless decode: {}", file.path.display()))?;
 
 	let decoded = obj
 		.decode_pixel_data()
@@ -801,37 +704,18 @@ fn decode_raw_jpeg_lossless_blocking(
 		}
 	};
 
-	let metadata = RawFrameMetadata {
-		rows: img_rows,
-		columns: img_columns,
-		bits_allocated,
-		pixel_representation,
-		samples_per_pixel: 1,
-		photometric_interpretation: photometric,
-		rescale_slope: slope,
-		rescale_intercept: intercept,
-		default_wc: default_window.map(|w| w.center),
-		default_ww: default_window.map(|w| w.width),
-	};
+	let metadata = file.raw_metadata(img_rows, img_columns, bits_allocated, 1);
 	Ok((sample_bytes, metadata))
 }
 
-async fn decode_raw_jp2_samples(
-	path: PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	task::spawn_blocking(move || decode_raw_jp2_samples_blocking(&path, frame, default_window))
+async fn decode_raw_jp2_samples(file: FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	task::spawn_blocking(move || decode_raw_jp2_samples_blocking(&file, frame))
 		.await
 		.context("raw JP2 decode task failed")?
 }
 
-fn decode_raw_jp2_samples_blocking(
-	path: &PathBuf,
-	frame: u32,
-	default_window: Option<crate::types::WindowPreset>,
-) -> Result<(Bytes, RawFrameMetadata)> {
-	let fragment = read_encapsulated_fragment_blocking(path, frame)?;
+fn decode_raw_jp2_samples_blocking(file: &FileEntry, frame: u32) -> Result<(Bytes, RawFrameMetadata)> {
+	let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
 
 	let jp2_image = jpeg2k::Image::from_bytes(&fragment)
 		.map_err(anyhow::Error::from)
@@ -852,14 +736,6 @@ fn decode_raw_jp2_samples_blocking(
 	let height = comps[0].height();
 	let precision = comps[0].precision();
 
-	let object = open_file(path)
-		.with_context(|| format!("failed to open DICOM for raw JP2 metadata: {}", path.display()))?;
-	let photometric =
-		read_str_tag(&object, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
-	let pixel_representation = read_u32_tag(&object, "PixelRepresentation").unwrap_or(0);
-	let slope = read_f64_tag(&object, "RescaleSlope").unwrap_or(1.0);
-	let intercept = read_f64_tag(&object, "RescaleIntercept").unwrap_or(0.0);
-
 	let (sample_bytes, bits_allocated) = if precision <= 8 {
 		let samples: Vec<u8> = comps[0].data_u8().collect();
 		(Bytes::from(samples), 8u32)
@@ -869,18 +745,7 @@ fn decode_raw_jp2_samples_blocking(
 		(Bytes::from(bytes), 16u32)
 	};
 
-	let metadata = RawFrameMetadata {
-		rows: height,
-		columns: width,
-		bits_allocated,
-		pixel_representation,
-		samples_per_pixel: 1,
-		photometric_interpretation: photometric,
-		rescale_slope: slope,
-		rescale_intercept: intercept,
-		default_wc: default_window.map(|w| w.center),
-		default_ww: default_window.map(|w| w.width),
-	};
+	let metadata = file.raw_metadata(height, width, bits_allocated, 1);
 	Ok((sample_bytes, metadata))
 }
 

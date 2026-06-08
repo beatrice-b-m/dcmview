@@ -59,6 +59,12 @@ pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) ->
 		frame_count,
 		rows: 16,
 		columns: 16,
+		bits_allocated: 16,
+		pixel_representation: 0,
+		samples_per_pixel: 1,
+		photometric_interpretation: "MONOCHROME2".to_string(),
+		rescale_slope: 1.0,
+		rescale_intercept: 0.0,
 		transfer_syntax_uid: transfer_syntax_uid.to_string(),
 		default_window: None,
 	}
