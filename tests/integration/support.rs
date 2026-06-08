@@ -79,8 +79,10 @@ pub fn grayscale_jpeg_fragment_16x16(seed: u8) -> Vec<u8> {
 
 
 pub fn app_state(files: Vec<FileEntry>) -> AppState {
+	let file_summaries = dcmview::server::file_summaries(files.as_slice());
 	AppState {
 		files: Arc::new(files),
+		file_summaries,
 		pixel_cache: pixels::new_cache(),
 		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),

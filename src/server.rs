@@ -23,6 +23,7 @@ use tokio::net::TcpListener;
 #[derive(Clone)]
 pub struct AppState {
 	pub files: Arc<Vec<FileEntry>>,
+	pub file_summaries: Arc<Vec<FileSummary>>,
 	pub pixel_cache: Arc<Mutex<FrameCache>>,
 	pub raw_cache: Arc<Mutex<RawFrameCache>>,
 	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
@@ -32,6 +33,10 @@ pub struct AppState {
 	pub server_start: Instant,
 	pub server_start_ms: u64,
 	pub last_request: Arc<AtomicU64>,
+}
+
+pub fn file_summaries(files: &[FileEntry]) -> Arc<Vec<FileSummary>> {
+	Arc::new(files.iter().map(FileSummary::from).collect())
 }
 
 #[derive(Debug, Clone)]
@@ -149,9 +154,8 @@ pub fn router(state: AppState) -> Router {
 
 async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
 	touch_request(&state);
-	let files = state.files.iter().map(FileSummary::from).collect();
 	Json(FilesResponse {
-		files,
+		files: (*state.file_summaries).clone(),
 		tunnelled: state.tunnel_info.is_some(),
 		tunnel_host: state.tunnel_info.as_ref().map(|t| t.tunnel_host.clone()),
 		server_start_ms: state.server_start_ms,

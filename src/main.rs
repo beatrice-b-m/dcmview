@@ -89,8 +89,10 @@ async fn run() -> Result<()> {
 		None
 	};
 
+	let file_summaries = server::file_summaries(load_report.files.as_slice());
 	let state = AppState {
 		files: Arc::new(load_report.files),
+		file_summaries,
 		pixel_cache: pixels::new_cache(),
 		raw_cache: pixels::new_raw_cache(),
 		tag_cache: Arc::new(Mutex::new(HashMap::new())),
