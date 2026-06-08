@@ -1,124 +1,125 @@
 # dcmview
 
-`dcmview` is an ephemeral DICOM inspection tool for developers and data scientists.
-It scans one or more DICOM files or directories, starts a local web UI, serves image frames and tags through a small HTTP API, and exits cleanly when you stop it.
+`dcmview` is an ephemeral DICOM inspection tool for developers and data scientists. It scans one or more DICOM files or directories, starts a local browser viewer, exposes a small HTTP API for frames, tags, and annotations, and exits cleanly when stopped.
 
-The focus is fast multi-frame inspection (DBT, cine MR) with a single self-contained Rust binary.
+The main use case is fast multi-frame inspection, such as DBT and cine MR, from a single Rust binary with the Svelte frontend embedded at build time.
 
-## Installation
+## Install
 
-### From source
+Prerequisites:
+
+- Rust stable 1.75+
+- Node.js 18+ and npm at build time
+- `ssh` on `PATH` only when using `--tunnel`
+
+Install from a checkout of this repository:
 
 ```bash
-# install frontend build dependencies once
-npm --prefix frontend ci
-
-# build and install to $CARGO_HOME/bin
 cargo install --path .
 ```
 
 Build without installing:
 
 ```bash
-npm --prefix frontend ci
 cargo build --release
-# binary at target/release/dcmview
+./target/release/dcmview --help
 ```
 
-### Prerequisites
+`build.rs` runs `npm ci` when `frontend/package-lock.json` changes and then builds the frontend. If `node` or `npm` are not on `PATH`, set `DCMVIEW_NODE_PATH` or `DCMVIEW_NPM_PATH` to absolute executable paths.
 
-Build-time: Rust stable 1.75+, Node.js 18+, npm.
-Runtime: `ssh` on `PATH` (only if you use `--tunnel`).
-
-## Quick start
+## Quick Start
 
 ```bash
-# open a single file in the browser
+# Open one file in the browser
 dcmview ./scan.dcm
 
-# scan a directory recursively
+# Scan a directory recursively
 dcmview ./study_dir
 
-# fixed port, no browser, auto-shutdown after 5 minutes idle
+# Run headless on a fixed port and stop after 5 idle minutes
 dcmview --host 127.0.0.1 --port 8888 --no-browser --timeout 300 ./study_dir
 ```
 
-`dcmview` prints the local URL (`dcmview: server running at http://...`) as soon as the server is ready.
+When ready, `dcmview` prints:
 
-## CLI reference
-
+```text
+dcmview: server running at http://127.0.0.1:<port>
 ```
+
+Press Ctrl+C to stop the server.
+
+## CLI
+
+```text
 dcmview [OPTIONS] <PATH> [PATH ...]
 ```
 
-### Options
+| Option | Default | Description |
+|---|---:|---|
+| `<PATH>...` | required | DICOM files or directories to inspect |
+| `-p, --port <u16>` | `0` | Bind port; `0` auto-assigns an available port |
+| `--host <addr>` | `127.0.0.1` | Bind address |
+| `--no-browser` | false | Do not open the browser automatically |
+| `--timeout <seconds>` | none | Exit after this many seconds without API/browser requests |
+| `--no-recursive` | false | Scan only the top level of input directories |
+| `--tunnel` | false | Start an SSH local port-forward helper |
+| `--tunnel-host <host>` | none | SSH target used with `--tunnel` |
+| `--tunnel-port <u16>` | `0` | Forwarded local port; `0` uses the server port |
+| `--annotations <csv>` | none | Load EMBED-style ROI annotations for overlay and editing |
 
-| Flag | Type | Default | Description |
-|---|---|---|---|
-| `<PATH>` | path(s) | required | One or more DICOM files or directories |
-| `-p, --port` | u16 | `0` | Bind port (`0` = auto-assign) |
-| `--host` | addr | `127.0.0.1` | Bind address (`0.0.0.0` for all interfaces) |
-| `--no-browser` | flag | — | Do not auto-open browser |
-| `--tunnel` | flag | — | Establish SSH reverse tunnel |
-| `--tunnel-host` | str | — | SSH host string (e.g. `user@myserver.com`) |
-| `--tunnel-port` | u16 | `0` | Local port to expose on tunnel host (`0` = same as bind port) |
-| `--timeout` | u64 | — | Auto-shutdown after N seconds of no browser requests |
-| `--no-recursive` | flag | — | Scan directories top-level only (default is recursive) |
-| `--annotations` | path | — | Load EMBED ROI annotations from CSV for overlay display |
-
-### Examples
-
-Single file:
+Examples:
 
 ```bash
 dcmview ./scan.dcm
-```
-
-Directory scan (recursive by default):
-
-```bash
-dcmview ./study_dir
-```
-
-Fixed host and port:
-
-```bash
-dcmview --host 127.0.0.1 --port 8888 ./study_dir
-```
-
-Remote tunnel workflow:
-
-```bash
-dcmview --tunnel --tunnel-host user@remote --tunnel-port 9000 ./study_dir
-```
-
-Headless run with idle timeout:
-
-```bash
-dcmview --no-browser --timeout 300 ./study_dir
-```
-
-With EMBED ROI annotations:
-
-```bash
+dcmview --no-recursive ./study_dir
+dcmview --host 0.0.0.0 --port 8888 ./study_dir
+dcmview --tunnel --tunnel-host user@host --tunnel-port 9000 ./study_dir
 dcmview --annotations ./embed_annotations.csv ./study_dir
 ```
 
-Annotations are editable during the viewer session. Edits are held in memory and can be downloaded with the
-viewer’s **Export ROIs** button; dcmview never modifies the input CSV or DICOM files.
+The server is unauthenticated. It binds to loopback by default; if you bind to a public interface, use your own network access controls.
 
-### EMBED annotation CSV format
+## Viewer
 
-`--annotations` accepts a CSV file. The parser is strict and fails startup on malformed rows.
+The embedded Svelte viewer includes:
 
-Required columns (exact names):
+- File tabs labeled from `PatientID · Modality · StudyDate` when available, otherwise by filename
+- Canvas-based frame viewing with pan, zoom, scroll, window/level, reset, flips, and 90-degree rotation
+- Window presets: Default, Full Dynamic, and common CT presets
+- Multi-frame controls with previous/next, cine playback, FPS selection, loop, and sweep
+- Lazy DICOM tag browsing with filter, sequence expansion, binary length display, resizable columns, and click-to-copy
+- Rectangular ROI annotation display and editing, including draw, select, move, resize, delete, frame scoping, and CSV export
 
-- `anon_dicom_path` — path to the DICOM file
-- `num_ROI` — integer, number of regions of interest
-- `ROI_coords` — JSON array of `[ymin, xmin, ymax, xmax]` bounding boxes
-- `ROI_frames` — JSON array of frame-index lists (or `[]` for non-frame-specific rows)
+Input shortcuts:
 
-JSON-valued fields must be CSV-quoted:
+| Action | Shortcut |
+|---|---|
+| Frame previous/next | Left/Right arrows or `[` / `]` |
+| Play/pause cine | Space |
+| Window/level tool | `W` |
+| Pan tool | `P` |
+| Zoom tool | `Z` |
+| Scroll tool | `S` |
+| ROI tool | `R` |
+| Reset viewport | Double-click |
+
+Mouse behavior depends on the active tool. Right-drag always zooms, middle-drag always pans, the wheel scrolls frames, and Ctrl/Cmd+wheel zooms.
+
+## Annotations
+
+`--annotations` loads an EMBED-style CSV into memory. dcmview never modifies the input CSV or DICOM files. Viewer edits are kept in memory and can be downloaded with **Export ROIs**.
+
+Required columns:
+
+- `anon_dicom_path`
+- `ROI_coords`
+
+Optional columns:
+
+- `num_ROI`; when present, it must equal `len(ROI_coords)`
+- `ROI_frames`; when omitted or `[]`, ROIs apply to all frames
+
+`ROI_coords` is a JSON array of `[ymin, xmin, ymax, xmax]` boxes. `ROI_frames` is a JSON array of frame-index lists. JSON-valued fields must be CSV-quoted.
 
 ```csv
 anon_dicom_path,num_ROI,ROI_coords,ROI_frames
@@ -126,66 +127,40 @@ anon_dicom_path,num_ROI,ROI_coords,ROI_frames
 /path/to/ffdm_case.dcm,1,"[[80,150,190,260]]","[]"
 ```
 
-Matching and behavior:
+Behavior:
 
-- Matching is by normalized path equality: `anon_dicom_path` must match the loaded DICOM path after path normalization
-- CSV rows without a matching loaded file are ignored
-- Loaded files without a matching CSV row show no ROIs
-- `len(ROI_coords)` must equal `num_ROI`
-- If `ROI_frames` is non-empty, its length must equal `num_ROI`
-- Frame indices are zero-based and must be `< NumberOfFrames` for the matched file
+- Matching uses normalized path equality against loaded DICOM paths
+- Rows without a matching loaded file are ignored
+- Loaded files without matching rows start with no ROIs
 - Duplicate `anon_dicom_path` rows are rejected
+- Frame indices are zero-based and must be less than `NumberOfFrames`
+- Coordinates are canonicalized to `[ymin, xmin, ymax, xmax]` when edited through the API
 
-## Deployment
+## Python Wrapper
 
-### Local
-
-```bash
-cargo build --release
-# copy target/release/dcmview to target host; run directly
-```
-
-### Remote host with local browser access
+The `dcmview-py` package is a thin subprocess wrapper. It does not bundle the Rust binary; `dcmview` must be on `PATH`.
 
 ```bash
-dcmview --host 127.0.0.1 --port 8432 --tunnel --tunnel-host user@my-server /data/study
+cargo install --path .
+python -m pip install -e .
+python -m dcmview_py --help
 ```
 
-`dcmview` prints the local forwarded URL once the tunnel probe is ready. If `ssh` is unavailable, it keeps running and prints a manual forwarding command.
-
-### Operational notes
-
-- No persistent state, database, or config files are created
-- Binds to loopback (`127.0.0.1`) by default
-- If binding publicly (`--host 0.0.0.0`), place behind your own network controls
-
-## Python wrapper
-
-The Python package (`dcmview-py`) is a thin subprocess wrapper around the `dcmview` binary. It does not bundle the Rust binary — `dcmview` must be on `PATH`.
-
-### Install
-
-```bash
-cargo install --path .           # install the Rust binary
-python -m pip install -e .       # install the Python wrapper
-python -m dcmview_py --help      # verify
-```
-
-### Script usage
+Script usage:
 
 ```python
 from dcmview_py import view
 
-# blocking call (returns when dcmview exits)
+# Blocking call; returns when dcmview exits.
 view(["./scan.dcm"], browser=False, timeout=300)
 
-# non-blocking
+# Non-blocking call.
 handle = view(["./study_dir"], browser=False, annotations="./embed_annotations.csv", block=False)
 print(handle.url)
 handle.stop()
 ```
 
-### Context manager
+Context manager:
 
 ```python
 from dcmview_py import view
@@ -194,49 +169,33 @@ with view(["./study_dir"], browser=False, block=False) as handle:
     print(handle.url)
 ```
 
-### Notebook usage
-
-No inline notebook renderer is provided. Use the returned URL in your browser:
-
-```python
-from dcmview_py import view
-
-handle = view(["./scan.dcm"], browser=False, block=False)
-print(f"Open in browser: {handle.url}")
-handle.stop()
-```
-
-### CLI entrypoint
+Module CLI:
 
 ```bash
 python -m dcmview_py --no-browser --timeout 120 ./study_dir
 python -m dcmview_py --annotations ./embed_annotations.csv ./study_dir
 ```
 
-Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-recursive`, `--annotations`, etc.).
+The module CLI mirrors the Rust options: `--host`, `--port`, `--tunnel`, `--no-recursive`, `--annotations`, and related flags.
 
 ## HTTP API
 
-### Endpoints
+Static frontend assets are served at `/` and `/assets/*`.
 
 | Method | Path | Description |
 |---|---|---|
 | GET | `/api/files` | File registry and server metadata |
-| GET | `/api/file/:index/info` | Frame dimensions and transfer syntax |
-| GET | `/api/file/:index/frame/:frame` | Rendered frame image (JPEG, JP2, or PNG) |
-| GET | `/api/file/:index/frame/:frame/raw` | Raw pixel data with metadata headers |
-| GET | `/api/file/:index/tags` | DICOM tag tree |
-| GET | `/api/file/:index/annotations` | EMBED ROI annotations for this file |
-| PUT | `/api/file/:index/annotations` | Replace this file's in-memory ROI annotations |
-| GET | `/api/annotations/export.csv` | Export current in-memory annotations as EMBED CSV |
+| GET | `/api/file/:index/info` | Frame metadata for one file |
+| GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG |
+| GET | `/api/file/:index/frame/:frame/raw` | Decoded frame sample bytes for client-side rendering |
+| GET | `/api/file/:index/tags` | Lazy DICOM tag tree |
+| GET | `/api/file/:index/annotations` | Current in-memory ROI annotations |
+| PUT | `/api/file/:index/annotations` | Replace in-memory ROI annotations for one file |
+| GET | `/api/annotations/export.csv` | Download current annotations as EMBED CSV |
 
-Static assets are served at `/` (index.html) and `/assets/*` (Svelte build output).
+### Files
 
-### `GET /api/files`
-
-Returns the file registry and server state.
-
-Response:
+`GET /api/files` returns:
 
 ```json
 {
@@ -246,7 +205,7 @@ Response:
       "path": "/path/to/scan.dcm",
       "label": "PATIENT · MG · 20240101",
       "has_pixels": true,
-      "frame_count": 1,
+      "frame_count": 60,
       "rows": 3000,
       "columns": 2500,
       "transfer_syntax_uid": "1.2.840.10008.1.2.4.50",
@@ -259,80 +218,62 @@ Response:
 }
 ```
 
-### `GET /api/file/:index/info`
+`GET /api/file/:index/info` returns `frame_count`, `rows`, `columns`, `transfer_syntax`, `has_pixels`, and `default_window` for one file.
 
-Returns frame-level metadata for a single file.
+### Display Frames
 
-Response:
-
-```json
-{
-  "frame_count": 60,
-  "rows": 3000,
-  "columns": 2500,
-  "transfer_syntax": "1.2.840.10008.1.2.4.50",
-  "has_pixels": true,
-  "default_window": { "center": 200.0, "width": 4000.0 }
-}
-```
-
-Returns 404 if `:index` is out of range.
-
-### `GET /api/file/:index/frame/:frame`
-
-Returns image bytes for a specific frame.
+`GET /api/file/:index/frame/:frame` returns `image/png` for supported display paths.
 
 Query parameters:
 
-| Param | Type | Description |
-|---|---|---|
-| `wc` | f64 | Explicit window center (overrides DICOM default) |
-| `ww` | f64 | Explicit window width (overrides DICOM default) |
-| `mode` | string | `default` (absent) or `full_dynamic` |
+| Param | Description |
+|---|---|
+| `wc` | Window center; used with `ww` in default mode |
+| `ww` | Window width; used with `wc` in default mode |
+| `mode` | `default` or `full_dynamic` |
 
-Window resolution order for `default` mode: query params → DICOM tags (0028,1050/1051) → 1st/99th percentile fallback.
+Window selection:
 
-`full_dynamic` mode ignores all overrides and computes window from true min/max of frame samples.
+- `default`: explicit `wc` and `ww`, then DICOM Window Center/Width, then 1st/99th percentile fallback
+- `full_dynamic`: true min/max of the current frame; ignores DICOM defaults and query window values
 
-Response varies by transfer syntax:
+Transfer syntax behavior:
 
-| Transfer syntax | Content-Type | Behavior |
-|---|---|---|
-| JPEG Baseline / Extended / Lossless / SV1 | `image/png` | Decoded server-side and PNG-encoded |
-| JPEG 2000 | `image/png` | Decoded server-side and PNG-encoded |
-| Uncompressed (LE/BE) | `image/png` | Windowed and PNG-encoded |
-| JPEG-LS / RLE | `image/png` | Decoded and PNG-encoded, or 422 if unsupported |
+| Transfer syntax | Display behavior |
+|---|---|
+| JPEG Baseline / Extended | Decoded server-side and PNG-encoded |
+| JPEG Lossless / Lossless SV1 | Decoded server-side and PNG-encoded |
+| JPEG 2000 lossless/lossy | Decoded server-side and PNG-encoded |
+| Implicit LE / Explicit LE / Explicit BE | Windowed server-side and PNG-encoded |
+| JPEG-LS / RLE / other | `422 {"error": "unsupported transfer syntax: ..."}` |
 
-Response headers:
+Response headers include `X-Cache: HIT` or `X-Cache: MISS`.
 
-- `X-Cache: HIT` or `X-Cache: MISS` — frame cache observability
+### Raw Frames
 
-Status codes:
+`GET /api/file/:index/frame/:frame/raw` returns `application/octet-stream` plus metadata headers. This is a decoded sample transport for the frontend, not a copy of the original DICOM Pixel Data element for compressed syntaxes.
 
-- `200` — image bytes
-- `404` — file index out of range, or file has no pixel data
-- `422` — unsupported transfer syntax (`{"error": "unsupported transfer syntax: {uid}"}`)
-- `500` — frame decode failed (`{"error": "frame decode failed: ..."}`)
+Supported raw paths:
 
-### `GET /api/file/:index/frame/:frame/raw`
+- Uncompressed frames: native sample bytes, normalized to little-endian by `dicom-object`
+- JPEG Baseline / Extended: decoded to 8-bit grayscale samples
+- JPEG Lossless: decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack
+- Grayscale JPEG 2000: decoded to 8-bit or 16-bit samples
 
-Returns raw pixel data for client-side rendering.
+JPEG-LS, RLE, unsupported syntaxes, and multi-component JP2 raw decoding return 422 or a decode error.
 
-Response headers (metadata):
+Headers:
 
+- `X-Cache`
 - `X-Frame-Rows`, `X-Frame-Columns`
 - `X-Frame-Bits-Allocated`, `X-Frame-Pixel-Representation`
 - `X-Frame-Samples-Per-Pixel`, `X-Frame-Photometric-Interpretation`
 - `X-Frame-Rescale-Slope`, `X-Frame-Rescale-Intercept`
-- `X-Frame-Default-Wc`, `X-Frame-Default-Ww` (if available)
+- `X-Frame-Default-Wc`, `X-Frame-Default-Ww` when DICOM window tags are available
 
-Body: raw pixel buffer.
+### Tags
 
-### `GET /api/file/:index/tags`
-
-Returns the full DICOM tag tree for a file, lazily built on first request.
-
-Response: array of `TagNode` objects.
+`GET /api/file/:index/tags` returns an array of tag nodes:
 
 ```json
 [
@@ -341,29 +282,15 @@ Response: array of `TagNode` objects.
     "vr": "CS",
     "keyword": "Modality",
     "value": { "type": "string", "value": "MG" }
-  },
-  {
-    "tag": "(0028,0010)",
-    "vr": "US",
-    "keyword": "Rows",
-    "value": { "type": "number", "value": 3000 }
-  },
-  {
-    "tag": "(7FE0,0010)",
-    "vr": "OW",
-    "keyword": "PixelData",
-    "value": { "type": "binary", "length": 15000000 }
   }
 ]
 ```
 
-Tag value types: `string`, `number`, `numbers`, `binary` (OB/OW/OD/OF/UN with length only), `sequence` (nested items), `error` (serialisation fallback).
+Value types are `string`, `number`, `numbers`, `binary`, `sequence`, and `error`. Pixel data and other binary VRs are represented by byte length, not by full values. Long numeric arrays and sequences may be truncated with `truncated` and `total` fields.
 
-Tags are in ascending (group, element) order. Sequences contain nested `TagNode[][]` arrays.
+### Annotations
 
-### `GET /api/file/:index/annotations`
-
-Returns EMBED ROI annotations for a file.
+`GET /api/file/:index/annotations` returns:
 
 ```json
 {
@@ -373,56 +300,27 @@ Returns EMBED ROI annotations for a file.
 }
 ```
 
-Returns an empty payload (`{"num_roi": 0, "roi_coords": [], "roi_frames": []}`) for files without matching annotations.
-
-### `PUT /api/file/:index/annotations`
-
-Replaces the in-memory EMBED ROI annotations for a file. Coordinates are canonicalized to
-`[ymin, xmin, ymax, xmax]`, `num_roi` is derived from `roi_coords.length`, and frame indices must be in range.
+Files without annotations return:
 
 ```json
-{
-  "num_roi": 1,
-  "roi_coords": [[120, 340, 220, 430]],
-  "roi_frames": [[0, 1, 2]]
-}
+{ "num_roi": 0, "roi_coords": [], "roi_frames": [] }
 ```
 
-Returns the canonical annotation payload. Invalid coordinates or frame mappings return
-`400 {"error": "..."}`. The original annotation CSV is not written.
+`PUT /api/file/:index/annotations` replaces one file's in-memory annotations and returns the canonicalized payload. Invalid coordinates or frame mappings return `400 {"error": "..."}`.
 
-### `GET /api/annotations/export.csv`
-
-Downloads the current in-memory annotations as an EMBED-compatible CSV with columns
-`anon_dicom_path,num_ROI,ROI_coords,ROI_frames`.
-
-## Frontend
-
-The embedded Svelte 5 frontend provides:
-
-- **File tabs** — one tab per file, labeled `PatientID · Modality · StudyDate` (or filename)
-- **Image viewport** — frame display with zoom/pan (CSS transforms), window/level adjustment, and tool switching (WL, Pan, Zoom, Scroll)
-- **ROI annotations** — display, draw, select, move, resize, delete, frame-scope, and export rectangular ROIs
-- **Viewer toolbar** — tool selector, W/L preset dropdown (Default, Full Dynamic, CT presets), reset and ROI export buttons
-- **Frame slider** — for multi-frame files: prev/next, cine play/pause, FPS selector (1–24), loop/sweep mode
-- **Tag panel** — filterable DICOM tag table with SQ expansion, binary length display, click-to-copy
-- **Status bar** — server URL, file count, live uptime
-
-Mouse model: left-drag routes by active tool; right-drag always zooms; middle-drag always pans; wheel scrubs frames (Ctrl/Cmd+wheel for zoom); double-click resets.
-
-Keyboard: arrow keys or `[` / `]` for frame navigation, Space for play/pause, W/P/Z/S to switch tools.
+`GET /api/annotations/export.csv` downloads the current in-memory annotations as `anon_dicom_path,num_ROI,ROI_coords,ROI_frames`.
 
 ## Development
 
-### Frontend
+Frontend:
 
 ```bash
 npm --prefix frontend ci
-npm --prefix frontend run dev     # watch mode
-npm --prefix frontend run build   # production build
+npm --prefix frontend run dev
+npm --prefix frontend run build
 ```
 
-### Backend
+Backend:
 
 ```bash
 cargo check
@@ -430,21 +328,21 @@ cargo build
 cargo build --release
 ```
 
-### Tests
+Tests:
 
 ```bash
 cargo test
 ```
 
-Integration tests use real DICOM fixtures (no codec mocks) and cover discovery, JPEG/JP2 frame behavior, uncompressed windowing, cache semantics, tags, and tunnel fallback.
+Integration tests use real DICOM fixtures and cover discovery, display-frame decoding, raw-frame transport, cache headers, tag serialization, annotations, and tunnel fallback.
 
-### Architecture
+Architecture summary:
 
-- **Backend**: Rust + Axum + Tokio
-- **DICOM engine**: `dicom-rs` crates (collector API for per-frame streaming)
-- **Pixel pipeline**: server-side decode/windowing to PNG, private raw-frame transport for interactive WL, LRU frame cache
-- **Frontend**: Svelte 5 + Vite + TypeScript, embedded in the binary via `rust-embed`
-- **Distribution**: single self-contained binary
+- Backend: Rust, Axum, Tokio
+- DICOM: `dicom-rs`, `dicom-pixeldata`, `jpeg2k`
+- Pixel pipeline: server-side display PNGs, raw sample transport for interactive rendering, LRU caches
+- Frontend: Svelte 5, Vite, TypeScript, embedded via `rust-embed`
+- Distribution: one executable with no runtime frontend assets
 
 ## License
 
