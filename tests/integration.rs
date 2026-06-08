@@ -1,8 +1,8 @@
 mod integration {
 	mod support;
 	mod loader_discovery;
-	mod pixels_jpeg_passthrough;
-	mod pixels_jp2_passthrough;
+	mod pixels_jpeg_decode;
+	mod pixels_jp2_decode;
 	mod pixels_uncompressed;
 	mod server_minimal;
 	mod tags_endpoint;

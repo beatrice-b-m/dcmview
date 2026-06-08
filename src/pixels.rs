@@ -206,11 +206,6 @@ pub async fn load_frame(
 	}
 
 	let syntax_class = classify_transfer_syntax(&file.transfer_syntax_uid);
-	let jp2_accept = accepts_jp2(request.accept_header.as_deref());
-	// JP2 passthrough (raw fragment) is cheap and doesn't need caching.
-	// JP2 decoded PNG must be cached — decode is expensive.
-	// Caching both would cause key collisions (same key, different content types).
-	let cache_allowed = !matches!(syntax_class, TransferSyntaxClass::Jpeg2000) || !jp2_accept;
 	let key = FrameCacheKey::new(
 		request.file_index,
 		request.frame,
@@ -219,48 +214,37 @@ pub async fn load_frame(
 		request.window_mode,
 	);
 
-	if cache_allowed {
-		if let Ok(mut lock) = cache.lock() {
-			if let Some(bytes) = lock.get(&key).cloned() {
-				return Ok(FrameResponse {
-					body: bytes,
-					content_type: content_type_for_class(syntax_class, jp2_accept),
-					cache_hit: true,
-				});
-			}
+	if let Ok(mut lock) = cache.lock() {
+		if let Some(bytes) = lock.get(&key).cloned() {
+			return Ok(FrameResponse {
+				body: bytes,
+				content_type: "image/png",
+				cache_hit: true,
+			});
 		}
 	}
 
 	let (body, content_type) = match syntax_class {
 		TransferSyntaxClass::Jpeg => (
-			read_encapsulated_fragment(file.path.clone(), request.frame).await?,
-			"image/jpeg",
+			decode_frame_to_png(file.path.clone(), request.frame).await?,
+			"image/png",
 		),
 		TransferSyntaxClass::JpegLossless => (
 			decode_frame_to_png(file.path.clone(), request.frame).await?,
 			"image/png",
 		),
-		TransferSyntaxClass::Jpeg2000 => {
-			if jp2_accept {
-				(
-					read_encapsulated_fragment(file.path.clone(), request.frame).await?,
-					"image/jp2",
-				)
-			} else {
-				(
-					decode_jp2_fragment_to_png(
-						file.path.clone(),
-						request.frame,
-						request.window_center,
-						request.window_width,
-						file.default_window,
-						request.window_mode,
-					)
-					.await?,
-					"image/png",
-				)
-			}
-		}
+		TransferSyntaxClass::Jpeg2000 => (
+			decode_jp2_fragment_to_png(
+				file.path.clone(),
+				request.frame,
+				request.window_center,
+				request.window_width,
+				file.default_window,
+				request.window_mode,
+			)
+			.await?,
+			"image/png",
+		),
 		TransferSyntaxClass::Uncompressed => (
 			decode_uncompressed_to_png(
 				file.path.clone(),
@@ -281,10 +265,8 @@ pub async fn load_frame(
 		}
 	};
 
-	if cache_allowed {
-		if let Ok(mut lock) = cache.lock() {
-			cache_frame_with_budget(&mut lock, key, body.clone());
-		}
+	if let Ok(mut lock) = cache.lock() {
+		cache_frame_with_budget(&mut lock, key, body.clone());
 	}
 
 	Ok(FrameResponse {
@@ -292,31 +274,6 @@ pub async fn load_frame(
 		content_type,
 		cache_hit: false,
 	})
-}
-
-fn content_type_for_class(class: TransferSyntaxClass, jp2_accept: bool) -> &'static str {
-	match class {
-		TransferSyntaxClass::Jpeg => "image/jpeg",
-		TransferSyntaxClass::JpegLossless => "image/png",
-		TransferSyntaxClass::Jpeg2000 if jp2_accept => "image/jp2",
-		TransferSyntaxClass::Jpeg2000 => "image/png",
-		TransferSyntaxClass::Uncompressed => "image/png",
-		TransferSyntaxClass::JpegLs | TransferSyntaxClass::Rle | TransferSyntaxClass::Unsupported => {
-			"application/octet-stream"
-		}
-	}
-}
-
-fn accepts_jp2(accept_header: Option<&str>) -> bool {
-	accept_header
-		.map(|value| value.split(',').any(|part| part.trim().starts_with("image/jp2")))
-		.unwrap_or(false)
-}
-
-async fn read_encapsulated_fragment(path: PathBuf, frame: u32) -> Result<Bytes> {
-	task::spawn_blocking(move || read_encapsulated_fragment_blocking(&path, frame))
-		.await
-		.context("fragment reader task failed")?
 }
 
 fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {

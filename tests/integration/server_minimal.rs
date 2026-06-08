@@ -9,7 +9,7 @@ use tempfile::tempdir;
 async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
 	let dir = tempdir().expect("temp dir");
 	let path = dir.path().join("server-jpeg.dcm");
-	let frame = vec![0xff, 0xd8, 0xff, 0xdb, 0x00, 0x00];
+	let frame = support::grayscale_jpeg_fragment_16x16(42);
 	support::write_encapsulated_dicom(&path, "1.2.840.10008.1.2.4.50", vec![frame.clone()]);
 
 	let app = server::router(support::app_state(vec![support::file_entry(
@@ -37,7 +37,11 @@ async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
 		.await;
 	first_frame.assert_status_ok();
 	assert_eq!(first_frame.header("X-Cache").to_str().expect("cache header"), "MISS");
-	assert_eq!(first_frame.as_bytes().as_ref(), frame.as_slice());
+	assert_eq!(
+		first_frame.header(header::CONTENT_TYPE).to_str().expect("content-type"),
+		"image/png"
+	);
+	assert_ne!(first_frame.as_bytes().as_ref(), frame.as_slice());
 
 	let second_frame = test_server
 		.get("/api/file/0/frame/0")

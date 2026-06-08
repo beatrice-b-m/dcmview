@@ -234,7 +234,7 @@ async fn raw_endpoint_returns_422_for_unsupported_transfer_syntax() {
 }
 
 #[tokio::test]
-async fn raw_jpeg_passthrough_decodes_to_8bit_samples() {
+async fn raw_jpeg_transport_decodes_to_8bit_samples() {
 	// A valid 1×1 white JPEG: SOF0 with one 1×1 pixel = 0xFF.
 	// Construct a minimal JFIF JPEG representing a 1×1 white grayscale image.
 	// We write it with the encapsulated path and verify the /raw endpoint decodes it.

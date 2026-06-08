@@ -5,6 +5,7 @@ use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
+use image::{GrayImage, Luma};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
@@ -25,6 +26,7 @@ pub fn write_encapsulated_dicom(path: &Path, transfer_syntax_uid: &str, fragment
 		DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(8_u16)),
 		DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(8_u16)),
 		DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(7_u16)),
+		DataElement::new(tags::PIXEL_REPRESENTATION, VR::US, PrimitiveValue::from(0_u16)),
 		DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
 		DataElement::new(tags::PHOTOMETRIC_INTERPRETATION, VR::CS, PrimitiveValue::from("MONOCHROME2")),
 		DataElement::new(tags::NUMBER_OF_FRAMES, VR::IS, PrimitiveValue::from(frame_count.to_string())),
@@ -60,6 +62,19 @@ pub fn file_entry(path: PathBuf, transfer_syntax_uid: &str, frame_count: u32) ->
 		transfer_syntax_uid: transfer_syntax_uid.to_string(),
 		default_window: None,
 	}
+}
+
+pub fn grayscale_jpeg_fragment_16x16(seed: u8) -> Vec<u8> {
+	let image = GrayImage::from_fn(16, 16, |x, y| {
+		let value = seed
+			.wrapping_add((x as u8).wrapping_mul(7))
+			.wrapping_add((y as u8).wrapping_mul(11));
+		Luma([value])
+	});
+	let mut encoded = Vec::new();
+	let mut encoder = image::codecs::jpeg::JpegEncoder::new_with_quality(&mut encoded, 90);
+	encoder.encode_image(&image).expect("encode grayscale jpeg fixture");
+	encoded
 }
 
 

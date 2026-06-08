@@ -293,8 +293,8 @@ Response varies by transfer syntax:
 
 | Transfer syntax | Content-Type | Behavior |
 |---|---|---|
-| JPEG Baseline / Extended / Lossless / SV1 | `image/jpeg` | Raw JPEG bytes, no server-side decode |
-| JPEG 2000 | `image/jp2` | Raw JP2 bytes if `Accept` includes `image/jp2`; falls back to PNG |
+| JPEG Baseline / Extended / Lossless / SV1 | `image/png` | Decoded server-side and PNG-encoded |
+| JPEG 2000 | `image/png` | Decoded server-side and PNG-encoded |
 | Uncompressed (LE/BE) | `image/png` | Windowed and PNG-encoded |
 | JPEG-LS / RLE | `image/png` | Decoded and PNG-encoded, or 422 if unsupported |
 
@@ -415,7 +415,7 @@ Integration tests use real DICOM fixtures (no codec mocks) and cover discovery, 
 
 - **Backend**: Rust + Axum + Tokio
 - **DICOM engine**: `dicom-rs` crates (collector API for per-frame streaming)
-- **Pixel pipeline**: JPEG/JP2 passthrough (zero server-side decode), uncompressed windowing + PNG, LRU frame cache
+- **Pixel pipeline**: server-side decode/windowing to PNG, private raw-frame transport for interactive WL, LRU frame cache
 - **Frontend**: Svelte 5 + Vite + TypeScript, embedded in the binary via `rust-embed`
 - **Distribution**: single self-contained binary
 

@@ -84,13 +84,13 @@ On every `/frame/:n` request, classify the file's `TransferSyntaxUID` once and c
 
 | Class | TS UIDs | Action |
 |---|---|---|
-| JPEG passthrough | 4.50, 4.51, 4.57, 4.70 | Return raw fragment bytes; `Content-Type: image/jpeg` |
-| JPEG 2000 passthrough | 4.90, 4.91 | Return raw fragment bytes; `Content-Type: image/jp2` (fall back to PNG if `Accept` lacks `image/jp2`) |
+| JPEG | 4.50, 4.51, 4.57, 4.70 | Decode server-side → PNG |
+| JPEG 2000 | 4.90, 4.91 | Decode server-side → PNG |
 | Uncompressed | Implicit LE / Explicit LE / Explicit BE | Byte-offset slice → window → PNG |
 | JPEG-LS / RLE | 4.80, 4.81, 2.5 | `dicom-pixeldata` decode; 422 if unsupported |
 | Other | — | HTTP 422 `{"error": "unsupported transfer syntax: {uid}"}` |
 
-**Critical rule:** never decode JPEG server-side on the passthrough path. The browser's native decoder handles it.
+**Critical rule:** display-frame endpoints always return PNG for supported image transfer syntaxes. Do not rely on browser-native DICOM fragment decoding for viewer correctness.
 
 ---
 
@@ -293,7 +293,7 @@ tests/
 **Key integration test assertions:**
 - `X-Cache: MISS` on first frame request; `X-Cache: HIT` on identical repeat
 - `X-Cache: MISS` after any W/C param change
-- JPEG passthrough: `Content-Type: image/jpeg`; response bytes match reference extraction (no decode)
+- JPEG / JPEG 2000 display frames: `Content-Type: image/png`; response bytes must not be raw compressed fragments
 - Uncompressed: pixel values at known coordinates match a reference tool (e.g., pydicom)
 - Multi-frame BOT: second request for a frame on the same file does **not** re-read the BOT
 - `has_pixels: false` in `/api/files` for SR files; `/frame/0` returns 404
@@ -305,5 +305,5 @@ tests/
 
 **Performance targets** (verify with timing instrumentation, not mocks):
 - Steps 1–7 of startup sequence complete in < 300ms for a small file set
-- First frame (JPEG passthrough) served in < 200ms for a 100+-frame DBT file
+- First decoded frame served in < 200ms for a 100+-frame DBT file where codec cost permits
 - Memory usage stays roughly constant across sequential frame requests for large multi-frame files (collector API ensures O(one frame) allocation)
