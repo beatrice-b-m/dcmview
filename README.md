@@ -104,6 +104,9 @@ With EMBED ROI annotations:
 dcmview --annotations ./embed_annotations.csv ./study_dir
 ```
 
+Annotations are editable during the viewer session. Edits are held in memory and can be downloaded with the
+viewer’s **Export ROIs** button; dcmview never modifies the input CSV or DICOM files.
+
 ### EMBED annotation CSV format
 
 `--annotations` accepts a CSV file. The parser is strict and fails startup on malformed rows.
@@ -224,6 +227,8 @@ Module flags mirror the Rust CLI options (`--host`, `--port`, `--tunnel`, `--no-
 | GET | `/api/file/:index/frame/:frame/raw` | Raw pixel data with metadata headers |
 | GET | `/api/file/:index/tags` | DICOM tag tree |
 | GET | `/api/file/:index/annotations` | EMBED ROI annotations for this file |
+| PUT | `/api/file/:index/annotations` | Replace this file's in-memory ROI annotations |
+| GET | `/api/annotations/export.csv` | Export current in-memory annotations as EMBED CSV |
 
 Static assets are served at `/` (index.html) and `/assets/*` (Svelte build output).
 
@@ -370,13 +375,35 @@ Returns EMBED ROI annotations for a file.
 
 Returns an empty payload (`{"num_roi": 0, "roi_coords": [], "roi_frames": []}`) for files without matching annotations.
 
+### `PUT /api/file/:index/annotations`
+
+Replaces the in-memory EMBED ROI annotations for a file. Coordinates are canonicalized to
+`[ymin, xmin, ymax, xmax]`, `num_roi` is derived from `roi_coords.length`, and frame indices must be in range.
+
+```json
+{
+  "num_roi": 1,
+  "roi_coords": [[120, 340, 220, 430]],
+  "roi_frames": [[0, 1, 2]]
+}
+```
+
+Returns the canonical annotation payload. Invalid coordinates or frame mappings return
+`400 {"error": "..."}`. The original annotation CSV is not written.
+
+### `GET /api/annotations/export.csv`
+
+Downloads the current in-memory annotations as an EMBED-compatible CSV with columns
+`anon_dicom_path,num_ROI,ROI_coords,ROI_frames`.
+
 ## Frontend
 
 The embedded Svelte 5 frontend provides:
 
 - **File tabs** — one tab per file, labeled `PatientID · Modality · StudyDate` (or filename)
 - **Image viewport** — frame display with zoom/pan (CSS transforms), window/level adjustment, and tool switching (WL, Pan, Zoom, Scroll)
-- **Viewer toolbar** — tool selector, W/L preset dropdown (Default, Full Dynamic, CT presets), reset button
+- **ROI annotations** — display, draw, select, move, resize, delete, frame-scope, and export rectangular ROIs
+- **Viewer toolbar** — tool selector, W/L preset dropdown (Default, Full Dynamic, CT presets), reset and ROI export buttons
 - **Frame slider** — for multi-frame files: prev/next, cine play/pause, FPS selector (1–24), loop/sweep mode
 - **Tag panel** — filterable DICOM tag table with SQ expansion, binary length display, click-to-copy
 - **Status bar** — server URL, file count, live uptime
