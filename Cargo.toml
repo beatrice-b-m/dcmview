@@ -7,6 +7,7 @@ build = "build.rs"
 [features]
 default = []
 debug-embed = ["rust-embed/debug-embed"]
+remote-fixtures = ["dep:dicom-test-files"]
 
 [dependencies]
 # DICOM
@@ -55,6 +56,7 @@ thiserror = "2"
 chrono = { version = "0.4", features = ["clock"] }
 futures = "0.3"
 urlencoding = "2"
+dicom-test-files = { version = "0.4", optional = true }
 
 [build-dependencies]
 sha2 = "0.10"

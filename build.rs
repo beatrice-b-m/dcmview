@@ -9,7 +9,9 @@ fn main() {
 	emit_src_fingerprints(Path::new("frontend/src"));
 	println!("cargo:rerun-if-changed=frontend/package.json");
 	println!("cargo:rerun-if-changed=frontend/package-lock.json");
+	println!("cargo:rerun-if-changed=frontend/index.html");
 	println!("cargo:rerun-if-changed=frontend/svelte.config.js");
+	println!("cargo:rerun-if-changed=frontend/tsconfig.json");
 	println!("cargo:rerun-if-changed=frontend/vite.config.ts");
 	println!("cargo:rerun-if-env-changed=DCMVIEW_NODE_PATH");
 	println!("cargo:rerun-if-env-changed=DCMVIEW_NPM_PATH");
