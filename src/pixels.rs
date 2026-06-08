@@ -521,8 +521,7 @@ fn decode_uncompressed_to_png_blocking(
 		.element_by_name("PixelData")
 		.context("frame decode failed: missing PixelData")?
 		.to_bytes()
-		.context("frame decode failed: pixel bytes unavailable")?
-		.into_owned();
+		.context("frame decode failed: pixel bytes unavailable")?;
 
 	if offset + frame_size > pixel_bytes.len() {
 		return Err(anyhow!("frame out of range"));
