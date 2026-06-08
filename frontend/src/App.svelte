@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { fetchFiles, type FilesResponse, type WindowMode } from "./api";
+	import { annotationsExportUrl, fetchFiles, type FilesResponse, type WindowMode } from "./api";
 	import FileTabs from "./lib/FileTabs.svelte";
 	import FrameSlider from "./lib/FrameSlider.svelte";
 	import ImageViewport from "./lib/ImageViewport.svelte";
@@ -82,6 +82,15 @@
 		orientationByFile = { ...orientationByFile, [activeFileIndex]: { ...cur, rotation: r } };
 	}
 
+	function exportAnnotations() {
+		const link = document.createElement('a');
+		link.href = annotationsExportUrl();
+		link.download = 'dcmview-annotations.csv';
+		document.body.appendChild(link);
+		link.click();
+		link.remove();
+	}
+
 	function toggleTagPanel() {
 		tagPanelCollapsed = !tagPanelCollapsed;
 	}
@@ -148,6 +157,7 @@
 				case 'p': activeTool = 'pan'; break;
 				case 'z': activeTool = 'zoom'; break;
 				case 's': activeTool = 'scroll'; break;
+				case 'r': activeTool = 'annotate_rect'; break;
 			}
 		};
 		window.addEventListener('keydown', handleKey);
@@ -186,6 +196,7 @@
 			onflipV={applyFlipV}
 			onrotateCW={applyRotateCW}
 			onrotateCCW={applyRotateCCW}
+			onexportAnnotations={exportAnnotations}
 		/>
 		<section class="content" style={`--tag-panel-width:${sidebarWidthPx}px;`}>
 			<ImageViewport

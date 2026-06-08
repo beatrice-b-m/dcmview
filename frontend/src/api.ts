@@ -76,6 +76,18 @@ async function requestJson<T>(path: string): Promise<T> {
 	return (await response.json()) as T;
 }
 
+async function sendJson<T>(path: string, method: string, body: unknown): Promise<T> {
+	const response = await fetch(path, {
+		method,
+		headers: { "Content-Type": "application/json" },
+		body: JSON.stringify(body),
+	});
+	if (!response.ok) {
+		throw await responseError(response, `request failed: ${path}`);
+	}
+	return (await response.json()) as T;
+}
+
 export function fetchFiles(): Promise<FilesResponse> {
 	return requestJson<FilesResponse>("/api/files");
 }
@@ -90,6 +102,17 @@ export function fetchTags(fileIndex: number): Promise<TagNode[]> {
 
 export function fetchAnnotations(fileIndex: number): Promise<EmbedRoiAnnotations> {
 	return requestJson<EmbedRoiAnnotations>(`/api/file/${fileIndex}/annotations`);
+}
+
+export function updateAnnotations(
+	fileIndex: number,
+	annotations: EmbedRoiAnnotations,
+): Promise<EmbedRoiAnnotations> {
+	return sendJson<EmbedRoiAnnotations>(`/api/file/${fileIndex}/annotations`, "PUT", annotations);
+}
+
+export function annotationsExportUrl(): string {
+	return "/api/annotations/export.csv";
 }
 
 export function frameUrl(fileIndex: number, frame: number, wc?: number | null, ww?: number | null, windowMode?: WindowMode | null): string {

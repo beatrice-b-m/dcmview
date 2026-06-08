@@ -10,6 +10,7 @@
 		onflipV,
 		onrotateCW,
 		onrotateCCW,
+		onexportAnnotations,
 	}: {
 		activeTool: ActiveTool;
 		selectedPresetId: string;
@@ -18,6 +19,7 @@
 		onflipV: () => void;
 		onrotateCW: () => void;
 		onrotateCCW: () => void;
+		onexportAnnotations: () => void;
 	} = $props();
 
 	const tools: ActiveTool[] = TOOL_ORDER;
@@ -42,6 +44,8 @@
 			<option value={preset.id}>{preset.label}</option>
 		{/each}
 	</select>
+	<span class="sep"></span>
+	<button type="button" onclick={onexportAnnotations} title="Export annotations as EMBED CSV">Export ROIs</button>
 	<span class="sep"></span>
 	<button type="button" onclick={onreset} title="Reset viewport (double-click)">Reset</button>
 	<div class="tool-group transform-group">

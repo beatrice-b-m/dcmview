@@ -1,6 +1,6 @@
 import type { WindowMode } from '../api';
 
-export type ActiveTool = 'pan' | 'scroll' | 'zoom' | 'window_level';
+export type ActiveTool = 'pan' | 'scroll' | 'zoom' | 'window_level' | 'annotate_rect';
 
 export type ImageOrientation = {
 	flipH: boolean;
@@ -10,7 +10,7 @@ export type ImageOrientation = {
 
 export const DEFAULT_ORIENTATION: ImageOrientation = { flipH: false, flipV: false, rotation: 0 };
 
-export const TOOL_ORDER: ActiveTool[] = ['pan', 'scroll', 'zoom', 'window_level'];
+export const TOOL_ORDER: ActiveTool[] = ['pan', 'scroll', 'zoom', 'window_level', 'annotate_rect'];
 
 export interface WlPreset {
 	id: string;
@@ -36,6 +36,7 @@ export const TOOL_LABELS: Record<ActiveTool, string> = {
 	pan: 'Pan',
 	zoom: 'Zoom',
 	scroll: 'Scroll',
+	annotate_rect: 'ROI',
 };
 
 export const TOOL_SHORTCUTS: Record<ActiveTool, string> = {
@@ -43,4 +44,5 @@ export const TOOL_SHORTCUTS: Record<ActiveTool, string> = {
 	pan: 'P',
 	zoom: 'Z',
 	scroll: 'S',
+	annotate_rect: 'R',
 };

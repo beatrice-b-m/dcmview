@@ -4,12 +4,27 @@
 		fetchAnnotations,
 		fetchDisplayFrameBlob,
 		fetchRawFrame,
+		updateAnnotations,
 		type DisplayFrameWindowOptions,
 		type EmbedRoiAnnotations,
 		type FileSummary,
 		type RawFrame,
 		type WindowMode,
 	} from "../api";
+	import {
+		addRoi,
+		canonicalRect,
+		deleteRoi,
+		isAllFrames,
+		moveCoord,
+		normalizeAnnotationsForEdit,
+		resizeCoord,
+		setRoiFrameScope,
+		updateRoiCoord,
+		type ImagePoint,
+		type RoiCoord,
+		type RoiHandle,
+	} from "./annotationGeometry";
 	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
 
 	type PipelineMode = "cine" | "diagnostic_wl";
@@ -19,6 +34,9 @@
 		| { mode: "wl"; startX: number; startY: number; baseCenter: number; baseWidth: number }
 		| { mode: "zoom_drag"; startX: number; startY: number; baseScale: number; pivotX: number; pivotY: number }
 		| { mode: "scroll_drag"; startY: number; baseFrame: number }
+		| { mode: "draw_roi"; start: ImagePoint; current: ImagePoint }
+		| { mode: "move_roi"; roiIndex: number; start: ImagePoint; original: RoiCoord }
+		| { mode: "resize_roi"; roiIndex: number; handle: RoiHandle; original: RoiCoord }
 		| null;
 
 	interface DisplayFrameCacheEntry {
@@ -71,11 +89,13 @@
 	let liveWindowWidth = $state<number | null>(null);
 	let viewportEl: HTMLElement | undefined = $state();
 	let canvasEl: HTMLCanvasElement | undefined = $state();
+	let roiSvgEl: SVGSVGElement | undefined = $state();
 	let wheelAccum = $state(0);
 	let currentRawFrame = $state<RawFrame | null>(null);
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
 	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
+	let selectedRoiByFile = $state<Record<number, number | null | undefined>>({});
 	let annotationRequestedByFile: Record<number, boolean> = {};
 
 	let rawRequestCtrl: AbortController | null = null;
@@ -161,6 +181,7 @@
 	const activeAnnotations = $derived(activeFile ? annotationsByFile[activeFile.index] ?? null : null);
 	const activeAnnotationError = $derived(activeFile ? annotationErrorsByFile[activeFile.index] ?? null : null);
 	const activeAnnotationLoading = $derived(activeFile ? annotationLoadingByFile[activeFile.index] ?? false : false);
+	const selectedRoiIndex = $derived(activeFile ? selectedRoiByFile[activeFile.index] ?? null : null);
 	const imageRows = $derived(
 		pipelineMode === "diagnostic_wl" && currentRawFrame
 			? currentRawFrame.metadata.rows
@@ -172,6 +193,11 @@
 			: activeFile?.columns ?? 0,
 	);
 	const visibleRois = $derived(deriveVisibleRois(activeAnnotations, currentFrame));
+	const draftRoi = $derived(
+		dragState?.mode === "draw_roi"
+			? canonicalRect(dragState.start, dragState.current, imageRows, imageColumns)
+			: null,
+	);
 	const roiListCountLabel = $derived(
 		activeAnnotations ? `${visibleRois.length} / ${activeAnnotations.num_roi}` : String(visibleRois.length),
 	);
@@ -190,10 +216,121 @@
 	}
 
 	function formatRoiFrames(frames: number[] | null): string {
-		if (frames === null) return "all frames";
+		if (isAllFrames(frames, activeFile?.frame_count ?? 0)) return "all frames";
 		if (frames.length === 0) return "no frame mapping";
 		const preview = frames.slice(0, 6).join(", ");
 		return frames.length > 6 ? `frames ${preview}, …` : `frames ${preview}`;
+	}
+
+	function setSelectedRoi(index: number | null) {
+		if (!activeFile) return;
+		selectedRoiByFile = {
+			...selectedRoiByFile,
+			[activeFile.index]: index,
+		};
+	}
+
+	function setAnnotationsForFile(fileIndex: number, annotations: EmbedRoiAnnotations) {
+		annotationsByFile = {
+			...annotationsByFile,
+			[fileIndex]: annotations,
+		};
+	}
+
+	function currentEditableAnnotations(): EmbedRoiAnnotations {
+		return normalizeAnnotationsForEdit(activeAnnotations, activeFile?.frame_count ?? 0);
+	}
+
+	function syncAnnotations(fileIndex: number, annotations: EmbedRoiAnnotations) {
+		annotationErrorsByFile = {
+			...annotationErrorsByFile,
+			[fileIndex]: null,
+		};
+		void updateAnnotations(fileIndex, annotations)
+			.then((canonical) => {
+				setAnnotationsForFile(fileIndex, canonical);
+			})
+			.catch((error) => {
+				annotationErrorsByFile = {
+					...annotationErrorsByFile,
+					[fileIndex]: (error as Error).message || "Failed to save annotations",
+				};
+			});
+	}
+
+	function commitAnnotations(annotations: EmbedRoiAnnotations, selectedIndex: number | null = selectedRoiIndex) {
+		if (!activeFile) return;
+		setAnnotationsForFile(activeFile.index, annotations);
+		setSelectedRoi(selectedIndex);
+		syncAnnotations(activeFile.index, annotations);
+	}
+
+	function pointFromPointer(event: PointerEvent): ImagePoint | null {
+		if (!roiSvgEl) return null;
+		const matrix = roiSvgEl.getScreenCTM();
+		if (!matrix) return null;
+		const point = new DOMPoint(event.clientX, event.clientY).matrixTransform(matrix.inverse());
+		return {
+			x: Math.min(imageColumns, Math.max(0, point.x)),
+			y: Math.min(imageRows, Math.max(0, point.y)),
+		};
+	}
+
+	function hitTestRoi(point: ImagePoint): { roi: VisibleRoi; handle: RoiHandle | null } | null {
+		const tolerance = Math.max(3, 8 / Math.max(activeTransform.scale, 0.2));
+		for (let idx = visibleRois.length - 1; idx >= 0; idx -= 1) {
+			const roi = visibleRois[idx];
+			const handle = hitTestHandle(roi, point, tolerance);
+			if (handle) return { roi, handle };
+			const x0 = Math.min(roi.xmin, roi.xmax);
+			const x1 = Math.max(roi.xmin, roi.xmax);
+			const y0 = Math.min(roi.ymin, roi.ymax);
+			const y1 = Math.max(roi.ymin, roi.ymax);
+			if (point.x >= x0 && point.x <= x1 && point.y >= y0 && point.y <= y1) {
+				return { roi, handle: null };
+			}
+		}
+		return null;
+	}
+
+	function hitTestHandle(roi: VisibleRoi, point: ImagePoint, tolerance: number): RoiHandle | null {
+		for (const handle of roiHandles(roi)) {
+			if (Math.abs(point.x - handle.x) <= tolerance && Math.abs(point.y - handle.y) <= tolerance) {
+				return handle.handle;
+			}
+		}
+		return null;
+	}
+
+	function roiHandles(roi: VisibleRoi): Array<{ handle: RoiHandle; x: number; y: number }> {
+		const x0 = Math.min(roi.xmin, roi.xmax);
+		const x1 = Math.max(roi.xmin, roi.xmax);
+		const y0 = Math.min(roi.ymin, roi.ymax);
+		const y1 = Math.max(roi.ymin, roi.ymax);
+		const cx = (x0 + x1) / 2;
+		const cy = (y0 + y1) / 2;
+		return [
+			{ handle: "nw", x: x0, y: y0 },
+			{ handle: "n", x: cx, y: y0 },
+			{ handle: "ne", x: x1, y: y0 },
+			{ handle: "e", x: x1, y: cy },
+			{ handle: "se", x: x1, y: y1 },
+			{ handle: "s", x: cx, y: y1 },
+			{ handle: "sw", x: x0, y: y1 },
+			{ handle: "w", x: x0, y: cy },
+		];
+	}
+
+	function deleteSelectedRoi() {
+		if (!activeFile || selectedRoiIndex === null || !activeAnnotations) return;
+		const next = deleteRoi(activeAnnotations, selectedRoiIndex, activeFile.frame_count);
+		commitAnnotations(next, null);
+	}
+
+	function setSelectedScope(scope: "current" | "all") {
+		if (!activeFile || selectedRoiIndex === null || !activeAnnotations) return;
+		const next = setRoiFrameScope(activeAnnotations, selectedRoiIndex, scope, currentFrame, activeFile.frame_count);
+		commitAnnotations(next, selectedRoiIndex);
 	}
 
 	function ensureWlWorker(): boolean {
@@ -1040,7 +1177,22 @@ function startDisplayPrefetch(
 		currentRawFrame = null;
 		liveWindowCenter = null;
 		liveWindowWidth = null;
+		setSelectedRoi(null);
 		clearCanvas();
+	});
+
+	$effect(() => {
+		const handleKey = (event: KeyboardEvent) => {
+			const target = event.target as HTMLElement | null;
+			if (target && ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName)) return;
+			if (activeTool !== "annotate_rect") return;
+			if (event.key === "Delete" || event.key === "Backspace") {
+				event.preventDefault();
+				deleteSelectedRoi();
+			}
+		};
+		window.addEventListener("keydown", handleKey);
+		return () => window.removeEventListener("keydown", handleKey);
 	});
 
 	$effect(() => {
@@ -1295,6 +1447,24 @@ function startDisplayPrefetch(
 						};
 					}
 					break;
+				case "annotate_rect": {
+					if (activeAnnotationLoading) break;
+					const point = pointFromPointer(event);
+					if (!point) break;
+					event.preventDefault();
+					const hit = hitTestRoi(point);
+					if (hit) {
+						setSelectedRoi(hit.roi.index);
+						const original: RoiCoord = [hit.roi.ymin, hit.roi.xmin, hit.roi.ymax, hit.roi.xmax];
+						dragState = hit.handle
+							? { mode: "resize_roi", roiIndex: hit.roi.index, handle: hit.handle, original }
+							: { mode: "move_roi", roiIndex: hit.roi.index, start: point, original };
+						break;
+					}
+					setSelectedRoi(null);
+					dragState = { mode: "draw_roi", start: point, current: point };
+					break;
+				}
 			}
 		}
 	}
@@ -1334,6 +1504,38 @@ function startDisplayPrefetch(
 			const dy = event.clientY - dragState.startY;
 			const frameDelta = Math.round(dy / DRAG_PIXELS_PER_FRAME);
 			currentFrame = Math.max(0, Math.min(activeFile.frame_count - 1, dragState.baseFrame + frameDelta));
+			return;
+		}
+
+		if (dragState.mode === "draw_roi") {
+			const point = pointFromPointer(event);
+			if (point) {
+				dragState = { ...dragState, current: point };
+			}
+			return;
+		}
+
+		if (dragState.mode === "move_roi" && activeAnnotations) {
+			const point = pointFromPointer(event);
+			if (!point) return;
+			const moved = moveCoord(
+				dragState.original,
+				{ x: point.x - dragState.start.x, y: point.y - dragState.start.y },
+				imageRows,
+				imageColumns,
+			);
+			const next = updateRoiCoord(activeAnnotations, dragState.roiIndex, moved, activeFile.frame_count);
+			setAnnotationsForFile(activeFile.index, next);
+			return;
+		}
+
+		if (dragState.mode === "resize_roi" && activeAnnotations) {
+			const point = pointFromPointer(event);
+			if (!point) return;
+			const resized = resizeCoord(dragState.original, dragState.handle, point, imageRows, imageColumns);
+			if (!resized) return;
+			const next = updateRoiCoord(activeAnnotations, dragState.roiIndex, resized, activeFile.frame_count);
+			setAnnotationsForFile(activeFile.index, next);
 		}
 	}
 
@@ -1343,10 +1545,24 @@ function startDisplayPrefetch(
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
 		}
+		if (dragState?.mode === "draw_roi") {
+			const coord = canonicalRect(dragState.start, dragState.current, imageRows, imageColumns);
+			if (coord && activeFile) {
+				const next = addRoi(activeAnnotations, coord, currentFrame, activeFile.frame_count);
+				commitAnnotations(next, next.num_roi - 1);
+			}
+		}
+		if ((dragState?.mode === "move_roi" || dragState?.mode === "resize_roi") && activeFile && activeAnnotations) {
+			syncAnnotations(activeFile.index, activeAnnotations);
+		}
 		dragState = null;
 	}
 
 	function onPointerCancel() {
+		if ((dragState?.mode === "move_roi" || dragState?.mode === "resize_roi") && activeFile) {
+			const next = updateRoiCoord(currentEditableAnnotations(), dragState.roiIndex, dragState.original, activeFile.frame_count);
+			setAnnotationsForFile(activeFile.index, next);
+		}
 		dragState = null;
 	}
 
@@ -1413,21 +1629,44 @@ function startDisplayPrefetch(
 			style={`transform:${transformCss}; width:${Math.max(imageColumns, 1)}px; height:${Math.max(imageRows, 1)}px;`}
 		>
 			<canvas bind:this={canvasEl} class="dicom-canvas"></canvas>
-			{#if imageColumns > 0 && imageRows > 0 && visibleRois.length > 0}
+			{#if imageColumns > 0 && imageRows > 0}
 				<svg
+					bind:this={roiSvgEl}
 					class="roi-overlay"
 					viewBox={`0 0 ${imageColumns} ${imageRows}`}
 					preserveAspectRatio="none"
 					aria-hidden="true"
 				>
 					{#each visibleRois as roi (roi.index)}
-						<rect
-							x={Math.min(roi.xmin, roi.xmax)}
-							y={Math.min(roi.ymin, roi.ymax)}
-							width={Math.max(1, Math.abs(roi.xmax - roi.xmin))}
-							height={Math.max(1, Math.abs(roi.ymax - roi.ymin))}
-						></rect>
+						<g class:selected={selectedRoiIndex === roi.index}>
+							<rect
+								class="roi-rect"
+								x={Math.min(roi.xmin, roi.xmax)}
+								y={Math.min(roi.ymin, roi.ymax)}
+								width={Math.max(1, Math.abs(roi.xmax - roi.xmin))}
+								height={Math.max(1, Math.abs(roi.ymax - roi.ymin))}
+							></rect>
+							<text
+								class="roi-label"
+								x={Math.min(roi.xmin, roi.xmax) + 3}
+								y={Math.max(10, Math.min(roi.ymin, roi.ymax) - 4)}
+							>#{roi.index + 1}</text>
+							{#if selectedRoiIndex === roi.index}
+								{#each roiHandles(roi) as handle}
+									<circle class="roi-handle" cx={handle.x} cy={handle.y} r={4}></circle>
+								{/each}
+							{/if}
+						</g>
 					{/each}
+					{#if draftRoi}
+						<rect
+							class="roi-rect draft"
+							x={draftRoi[1]}
+							y={draftRoi[0]}
+							width={Math.max(1, draftRoi[3] - draftRoi[1])}
+							height={Math.max(1, draftRoi[2] - draftRoi[0])}
+						></rect>
+					{/if}
 				</svg>
 			{/if}
 		</div>
@@ -1446,10 +1685,19 @@ function startDisplayPrefetch(
 			{:else}
 				<ul>
 					{#each visibleRois as roi (roi.index)}
-						<li>
-							<span class="roi-id">#{roi.index + 1}</span>
+						<li class:selected={selectedRoiIndex === roi.index}>
+							<button type="button" class="roi-select" onclick={() => setSelectedRoi(roi.index)}>
+								<span class="roi-id">#{roi.index + 1}</span>
+							</button>
 							<span class="roi-coords">[{roi.ymin}, {roi.xmin}, {roi.ymax}, {roi.xmax}]</span>
 							<span class="roi-frames">{formatRoiFrames(roi.frames)}</span>
+							{#if selectedRoiIndex === roi.index}
+								<div class="roi-actions">
+									<button type="button" onclick={() => setSelectedScope("current")}>Current</button>
+									<button type="button" onclick={() => setSelectedScope("all")}>All</button>
+									<button type="button" class="danger" onclick={deleteSelectedRoi}>Delete</button>
+								</div>
+							{/if}
 						</li>
 					{/each}
 				</ul>
@@ -1478,6 +1726,7 @@ function startDisplayPrefetch(
 	.viewport[data-tool="pan"]:active { cursor: grabbing; }
 	.viewport[data-tool="zoom"] { cursor: zoom-in; }
 	.viewport[data-tool="scroll"] { cursor: ns-resize; }
+	.viewport[data-tool="annotate_rect"] { cursor: crosshair; }
 	.viewport.dragging { cursor: grabbing; }
 	.image-layer {
 		position: relative;
@@ -1499,10 +1748,38 @@ function startDisplayPrefetch(
 		height: 100%;
 		pointer-events: none;
 	}
-	.roi-overlay rect {
+	.roi-rect {
 		fill: rgba(255, 115, 115, 0.12);
 		stroke: #ff7373;
 		stroke-width: 1.2;
+		vector-effect: non-scaling-stroke;
+	}
+	.roi-overlay g.selected .roi-rect {
+		fill: rgba(74, 158, 255, 0.16);
+		stroke: #4a9eff;
+		stroke-width: 1.6;
+	}
+	.roi-rect.draft {
+		fill: rgba(255, 212, 92, 0.14);
+		stroke: #ffd45c;
+		stroke-dasharray: 5 4;
+	}
+	.roi-label {
+		fill: #ffdede;
+		stroke: rgba(0, 0, 0, 0.75);
+		stroke-width: 2.4;
+		paint-order: stroke;
+		font-size: 11px;
+		font-family: ui-monospace, monospace;
+		vector-effect: non-scaling-stroke;
+	}
+	.roi-overlay g.selected .roi-label {
+		fill: #c8ddff;
+	}
+	.roi-handle {
+		fill: #4a9eff;
+		stroke: #101820;
+		stroke-width: 1;
 		vector-effect: non-scaling-stroke;
 	}
 	.placeholder,
@@ -1563,12 +1840,26 @@ function startDisplayPrefetch(
 	.roi-list li {
 		display: grid;
 		gap: 0.1rem;
-		padding-top: 0.1rem;
+		padding: 0.18rem 0;
 		border-top: 1px dashed rgba(110, 110, 110, 0.5);
+	}
+	.roi-list li.selected {
+		background: rgba(74, 158, 255, 0.12);
+		margin-inline: -0.25rem;
+		padding-inline: 0.25rem;
+		border-radius: 4px;
 	}
 	.roi-list li:first-child {
 		border-top: none;
 		padding-top: 0;
+	}
+	.roi-select {
+		width: fit-content;
+		background: none;
+		border: none;
+		color: inherit;
+		padding: 0;
+		cursor: pointer;
 	}
 	.roi-id {
 		font-weight: 600;
@@ -1579,6 +1870,26 @@ function startDisplayPrefetch(
 		font-family: ui-monospace, monospace;
 		line-height: 1.25;
 		color: #d8d8d8;
+	}
+	.roi-actions {
+		display: flex;
+		gap: 0.25rem;
+		margin-top: 0.15rem;
+	}
+	.roi-actions button {
+		background: #1b1b1b;
+		border: 1px solid #3a3a3a;
+		border-radius: 4px;
+		color: #e0e0e0;
+		cursor: pointer;
+		font-size: 0.68rem;
+		padding: 0.15rem 0.35rem;
+	}
+	.roi-actions button:hover {
+		background: rgba(74, 158, 255, 0.15);
+	}
+	.roi-actions button.danger {
+		color: #ffb0b0;
 	}
 	.zoom-controls {
 		position: absolute;
