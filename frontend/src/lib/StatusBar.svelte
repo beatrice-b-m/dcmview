@@ -12,9 +12,12 @@
 	} = $props();
 
 	let nowMs = $state(Date.now());
-	const timer = setInterval(() => {
-		nowMs = Date.now();
-	}, 1000);
+	$effect(() => {
+		const timer = setInterval(() => {
+			nowMs = Date.now();
+		}, 1000);
+		return () => clearInterval(timer);
+	});
 
 	const uptime = $derived.by(() => {
 		const elapsedSeconds = Math.max(0, Math.floor((nowMs - serverStartMs) / 1000));

@@ -54,10 +54,24 @@ export interface TagNode {
 	value: TagValue;
 }
 
+async function readServerError(response: Response): Promise<string | null> {
+	try {
+		const body = (await response.json()) as { error?: unknown };
+		return typeof body.error === "string" && body.error.length > 0 ? body.error : null;
+	} catch {
+		return null;
+	}
+}
+
+async function responseError(response: Response, fallback: string): Promise<Error> {
+	const serverMessage = await readServerError(response);
+	return new Error(serverMessage ?? `HTTP ${response.status}: ${fallback}`);
+}
+
 async function requestJson<T>(path: string): Promise<T> {
 	const response = await fetch(path);
 	if (!response.ok) {
-		throw new Error(`Request failed (${response.status}): ${path}`);
+		throw await responseError(response, `request failed: ${path}`);
 	}
 	return (await response.json()) as T;
 }
@@ -120,12 +134,7 @@ export async function fetchDisplayFrameBlob(
 		{ signal },
 	);
 	if (!response.ok) {
-		let serverMessage: string | undefined;
-		try {
-			const body = await response.json() as { error?: string };
-			serverMessage = body.error;
-		} catch { /* body is not JSON */ }
-		throw new Error(serverMessage ?? `HTTP ${response.status}: display frame fetch failed`);
+		throw await responseError(response, "display frame fetch failed");
 	}
 	return response.blob();
 }
@@ -155,14 +164,7 @@ export async function fetchRawFrame(
 ): Promise<RawFrame> {
 	const response = await fetch(`/api/file/${fileIndex}/frame/${frame}/raw`, { signal });
 	if (!response.ok) {
-		// Attempt to surface the server's {"error":"..."} message.  Fall back to a
-		// generic string if the body is not JSON or lacks the field.
-		let serverMessage: string | undefined;
-		try {
-			const body = await response.json() as { error?: string };
-			serverMessage = body.error;
-		} catch { /* body is not JSON */ }
-		throw new Error(serverMessage ?? `HTTP ${response.status}: raw frame fetch failed`);
+		throw await responseError(response, "raw frame fetch failed");
 	}
 	const buffer = await response.arrayBuffer();
 	const h = (name: string) => response.headers.get(name);

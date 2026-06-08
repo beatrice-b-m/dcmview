@@ -73,7 +73,6 @@
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let wheelAccum = $state(0);
 	let currentRawFrame = $state<RawFrame | null>(null);
-	let currentDisplayCacheKey = $state<string | null>(null);
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
 	let annotationLoadingByFile = $state<Record<number, boolean | undefined>>({});
@@ -374,15 +373,15 @@
 	}
 
 	function buildDisplayKey(fileIndex: number, frameIndex: number, options: DisplayFrameWindowOptions): string {
-		return `${displayFrameCacheKey(fileIndex, frameIndex, options)}:preset:${selectedPresetId}`;
+		return displayFrameCacheKey(fileIndex, frameIndex, options);
 	}
 
-function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOptions): string {
-	const wc = options.wc === null || options.wc === undefined ? "none" : options.wc.toFixed(4);
-	const ww = options.ww === null || options.ww === undefined ? "none" : options.ww.toFixed(4);
-	const mode = options.windowMode ?? "default";
-	return `${fileIndex}:${selectedPresetId}:${mode}:${wc}:${ww}`;
-}
+	function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOptions): string {
+		const wc = options.wc === null || options.wc === undefined ? "none" : options.wc.toFixed(4);
+		const ww = options.ww === null || options.ww === undefined ? "none" : options.ww.toFixed(4);
+		const mode = options.windowMode ?? "default";
+		return `${fileIndex}:${mode}:${wc}:${ww}`;
+	}
 
 	function validateRenderableRawFrame(frame: RawFrame): string | null {
 		const { rows, columns, bitsAllocated, samplesPerPixel } = frame.metadata;
@@ -520,21 +519,36 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 		renderRawFrameOnMainThread(canvasEl, frame, wc, ww);
 	}
 
-	async function drawDisplayEntry(entry: DisplayFrameCacheEntry, generation: number): Promise<void> {
+	function startDisplayDecode(key: string, entry: DisplayFrameCacheEntry): Promise<ImageBitmap> {
+		if (entry.bitmap) return Promise.resolve(entry.bitmap);
+		if (entry.decodePromise) return entry.decodePromise;
+
+		const promise = createImageBitmap(entry.blob)
+			.then((bitmap) => {
+				if (displayFrameCache.get(key) === entry && entry.bitmap === null) {
+					entry.bitmap = bitmap;
+					return bitmap;
+				}
+				bitmap.close();
+				throw new Error("display image decode superseded");
+			})
+			.finally(() => {
+				if (entry.decodePromise === promise) {
+					entry.decodePromise = null;
+				}
+			});
+		entry.decodePromise = promise;
+		return promise;
+	}
+
+	async function drawDisplayEntry(key: string, entry: DisplayFrameCacheEntry, generation: number): Promise<void> {
 		if (!canvasEl || pipelineMode !== "cine") return;
 		const ctx = canvasEl.getContext("2d", { alpha: false });
 		if (!ctx) return;
 
 		if (typeof createImageBitmap === "function") {
 			if (!entry.bitmap) {
-				if (!entry.decodePromise) {
-					entry.decodePromise = createImageBitmap(entry.blob).then((bitmap) => {
-						entry.bitmap = bitmap;
-						return bitmap;
-					});
-				}
-				await entry.decodePromise;
-				entry.decodePromise = null;
+				await startDisplayDecode(key, entry);
 			}
 			if (generation !== requestGeneration || !canvasEl || !entry.bitmap || pipelineMode !== "cine") return;
 			canvasEl.width = entry.bitmap.width;
@@ -753,13 +767,7 @@ function displayPrefetchScope(fileIndex: number, options: DisplayFrameWindowOpti
 						const blob = await fetchDisplayFrameBlob(fileIndex, frameIndex, windowOptions, signal);
 						const entry = cacheDisplayFrame(key, blob);
 						if (entry && typeof createImageBitmap === "function" && !entry.bitmap) {
-							createImageBitmap(entry.blob).then((bmp) => {
-								if (displayFrameCache.get(key) === entry && entry.bitmap === null) {
-									entry.bitmap = bmp;
-								} else {
-									bmp.close();
-								}
-							}).catch(() => {});
+							void startDisplayDecode(key, entry).catch(() => {});
 						}
 					} catch {
 						// Ignore network/decode failures during prefetch.
@@ -902,10 +910,9 @@ function startDisplayPrefetch(
 		const cacheKey = buildDisplayKey(fileIndex, frameIndex, windowOptions);
 		const cached = getCachedDisplayFrame(cacheKey);
 		if (cached) {
-			currentDisplayCacheKey = cacheKey;
 			loading = false;
 			loadError = null;
-			await drawDisplayEntry(cached, generation);
+			await drawDisplayEntry(cacheKey, cached, generation);
 			startDisplayPrefetch(
 				fileIndex,
 				activeFile.frame_count,
@@ -930,10 +937,9 @@ function startDisplayPrefetch(
 				loadError = "Display frame exceeded cache budget";
 				return;
 			}
-			currentDisplayCacheKey = cacheKey;
 			loading = false;
 			loadError = null;
-			await drawDisplayEntry(entry, generation);
+			await drawDisplayEntry(cacheKey, entry, generation);
 
 			startDisplayPrefetch(
 				fileIndex,
@@ -1032,7 +1038,6 @@ function startDisplayPrefetch(
 		clearRawFrameCache();
 		clearDisplayCache();
 		currentRawFrame = null;
-		currentDisplayCacheKey = null;
 		liveWindowCenter = null;
 		liveWindowWidth = null;
 		clearCanvas();
@@ -1055,14 +1060,12 @@ function startDisplayPrefetch(
 			displayPrefetchCtrl = null;
 			displayPrefetchScopeKey = "";
 			displayPrefetchSeedFrame = null;
-			currentDisplayCacheKey = null;
 		}
 	});
 
 	$effect(() => {
 		if (!activeFile?.has_pixels) {
 			currentRawFrame = null;
-			currentDisplayCacheKey = null;
 			loading = false;
 			loadError = null;
 			clearCanvas();
@@ -1103,14 +1106,6 @@ function startDisplayPrefetch(
 		);
 		const generation = ++wlRenderGeneration;
 		void renderDiagnosticFrame(currentRawFrame, window.wc, window.ww, generation);
-	});
-
-	$effect(() => {
-		if (pipelineMode !== "cine" || !canvasEl || !currentDisplayCacheKey) return;
-		const entry = getCachedDisplayFrame(currentDisplayCacheKey);
-		if (!entry) return;
-		const generation = requestGeneration;
-		void drawDisplayEntry(entry, generation);
 	});
 
 	$effect(() => {
