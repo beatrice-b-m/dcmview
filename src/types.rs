@@ -79,8 +79,8 @@ pub enum WindowMode {
 pub struct FrameCacheKey {
 	pub file_index: usize,
 	pub frame: u32,
-	pub window_center_bits: u64,
-	pub window_width_bits: u64,
+	pub window_center_bits: Option<u64>,
+	pub window_width_bits: Option<u64>,
 	pub window_mode: WindowMode,
 }
 
@@ -89,10 +89,25 @@ impl FrameCacheKey {
 		Self {
 			file_index,
 			frame,
-			window_center_bits: window_center.map(f64::to_bits).unwrap_or(0),
-			window_width_bits: window_width.map(f64::to_bits).unwrap_or(0),
+			window_center_bits: window_center.map(f64::to_bits),
+			window_width_bits: window_width.map(f64::to_bits),
 			window_mode,
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::{FrameCacheKey, WindowMode};
+
+	#[test]
+	fn frame_cache_key_distinguishes_absent_and_zero_window_params() {
+		let default_window = FrameCacheKey::new(0, 0, None, None, WindowMode::Default);
+		let explicit_zero = FrameCacheKey::new(0, 0, Some(0.0), Some(0.0), WindowMode::Default);
+
+		assert_ne!(default_window, explicit_zero);
+		assert_eq!(explicit_zero.window_center_bits, Some(0));
+		assert_eq!(explicit_zero.window_width_bits, Some(0));
 	}
 }
 
