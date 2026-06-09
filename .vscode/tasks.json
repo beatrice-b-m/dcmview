@@ -1,0 +1,60 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "dcmview: build debug binary",
+      "type": "shell",
+      "command": "cargo",
+      "args": [
+        "build"
+      ],
+      "group": "build",
+      "problemMatcher": [
+        "$rustc"
+      ]
+    },
+    {
+      "label": "dcmview-vscode: npm install",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "vscode",
+        "install"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "dcmview-vscode: compile",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "vscode",
+        "run",
+        "compile"
+      ],
+      "dependsOn": [
+        "dcmview: build debug binary"
+      ],
+      "problemMatcher": [
+        "$tsc"
+      ]
+    },
+    {
+      "label": "dcmview-vscode: watch",
+      "type": "shell",
+      "command": "npm",
+      "args": [
+        "--prefix",
+        "vscode",
+        "run",
+        "watch"
+      ],
+      "isBackground": true,
+      "problemMatcher": [
+        "$tsc-watch"
+      ]
+    }
+  ]
+}
