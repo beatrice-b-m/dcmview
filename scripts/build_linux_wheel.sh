@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+workspace_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+manylinux_image="${MANYLINUX_IMAGE:-quay.io/pypa/manylinux_2_28_x86_64}"
+python_bin="${MANYLINUX_PYTHON_BIN:-/opt/python/cp311-cp311/bin/python}"
+wheel_plat_name="${DCMVIEW_PY_WHEEL_PLAT_NAME:-manylinux_2_28_x86_64}"
+
+cd "$workspace_root"
+
+npm --prefix frontend ci
+npm --prefix frontend run build
+
+docker run --rm \
+	-v "$workspace_root:/io" \
+	-w /io \
+	-e DCMVIEW_SKIP_FRONTEND_BUILD=1 \
+	-e DCMVIEW_PY_BUNDLE_BINARY=/io/target/release/dcmview \
+	-e DCMVIEW_PY_REQUIRE_BUNDLED_BINARY=1 \
+	-e DCMVIEW_PY_WHEEL_PLAT_NAME="$wheel_plat_name" \
+	"$manylinux_image" \
+	/bin/bash -lc "
+		set -euo pipefail
+		curl https://sh.rustup.rs -sSf | sh -s -- -y --profile minimal --default-toolchain stable
+		source /root/.cargo/env
+		$python_bin -m pip install --upgrade pip build wheel
+		cargo build --release --locked
+		$python_bin -m build --wheel
+	"

@@ -36,6 +36,11 @@ def _available_dcmview_binary() -> Optional[Path]:
 
 
 class WrapperTests(unittest.TestCase):
+	def test_pyproject_declares_both_console_script_names(self) -> None:
+		pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+		self.assertIn('dcmview = "dcmview_py.__main__:main"', pyproject)
+		self.assertIn('dcmview-py = "dcmview_py.__main__:main"', pyproject)
+
 	def test_missing_binary_raises_runtime_error(self) -> None:
 		with mock.patch.dict(os.environ, {}, clear=True):
 			with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):

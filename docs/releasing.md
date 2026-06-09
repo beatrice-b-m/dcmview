@@ -35,6 +35,7 @@ For PyPI, prefer GitHub trusted publishing on the `pypi` environment. The workfl
 The release workflow will:
 
 - build `dcmview` on Ubuntu 22.04, macOS Intel, and macOS Apple Silicon
+- build the Linux PyPI wheel inside a `manylinux_2_28_x86_64` container so the published wheel is PyPI-compatible
 - smoke test each built binary against the committed fixture corpus
 - validate the Linux release artifact on Ubuntu 22.04 and Ubuntu 24.04
 - build bundled `dcmview-py` wheels

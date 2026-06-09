@@ -12,6 +12,7 @@ Recommended install paths:
 
 ```bash
 python -m pip install --user dcmview-py
+dcmview --help
 ```
 
 This wheel bundles the `dcmview` binary on supported platforms, so users do not need Rust or Node.js installed.
@@ -159,7 +160,10 @@ On supported release platforms, published wheels bundle `dcmview` inside the Pyt
 
 ```bash
 python -m pip install --user dcmview-py
+dcmview --help
 ```
+
+The package installs both `dcmview` and `dcmview-py`; `dcmview` is the primary CLI, and `dcmview-py` remains as a compatibility alias.
 
 From a source checkout, the wrapper still works with a locally installed `dcmview` on `PATH`.
 

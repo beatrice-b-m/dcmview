@@ -17,6 +17,7 @@ classifiers = [
 ]
 
 [project.scripts]
+dcmview = "dcmview_py.__main__:main"
 dcmview-py = "dcmview_py.__main__:main"
 
 [tool.setuptools]

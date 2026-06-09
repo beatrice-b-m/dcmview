@@ -15,6 +15,12 @@ fn main() {
 	println!("cargo:rerun-if-changed=frontend/vite.config.ts");
 	println!("cargo:rerun-if-env-changed=DCMVIEW_NODE_PATH");
 	println!("cargo:rerun-if-env-changed=DCMVIEW_NPM_PATH");
+	println!("cargo:rerun-if-env-changed=DCMVIEW_SKIP_FRONTEND_BUILD");
+
+	if should_skip_frontend_build() {
+		ensure_prebuilt_frontend_exists();
+		return;
+	}
 
 	let node_bin = match resolve_tool_path("node", "DCMVIEW_NODE_PATH") {
 		Ok(path) => path,
@@ -42,6 +48,20 @@ fn main() {
 fn fatal(message: &str) -> ! {
 	println!("cargo:error={message}");
 	std::process::exit(1);
+}
+
+fn should_skip_frontend_build() -> bool {
+	matches!(
+		std::env::var("DCMVIEW_SKIP_FRONTEND_BUILD").as_deref(),
+		Ok("1") | Ok("true") | Ok("TRUE") | Ok("yes") | Ok("YES")
+	)
+}
+
+fn ensure_prebuilt_frontend_exists() {
+	let required = Path::new("frontend/dist/index.html");
+	if !required.is_file() {
+		fatal("DCMVIEW_SKIP_FRONTEND_BUILD=1 requires a prebuilt frontend/dist/index.html");
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -18,8 +18,9 @@ jobs:
         include:
           - runner: ubuntu-22.04
             archive_suffix: x86_64-unknown-linux-gnu
-            wheel_plat_name: linux_x86_64
+            wheel_plat_name: manylinux_2_28_x86_64
             binary_name: dcmview
+            build_linux_wheel_in_container: true
           - runner: macos-13
             archive_suffix: x86_64-apple-darwin
             wheel_plat_name: macosx_10_13_x86_64
@@ -44,9 +45,15 @@ jobs:
         with:
           python-version: "3.11"
       - uses: dtolnay/rust-toolchain@stable
+        if: ${{ !matrix.build_linux_wheel_in_container }}
       - uses: Swatinem/rust-cache@v2
+        if: ${{ !matrix.build_linux_wheel_in_container }}
       - name: Build release binary
+        if: ${{ !matrix.build_linux_wheel_in_container }}
         run: cargo build --release --locked
+      - name: Build manylinux release binary and wheel
+        if: ${{ matrix.build_linux_wheel_in_container }}
+        run: bash scripts/build_linux_wheel.sh
       - name: Smoke test built binary
         run: >
           python scripts/smoke_release_binary.py
@@ -54,6 +61,7 @@ jobs:
           tests/fixtures/golden-uncompressed-u16-multiframe.dcm
           tests/fixtures/golden-no-pixels-sr.dcm
       - name: Build bundled wheel
+        if: ${{ !matrix.build_linux_wheel_in_container }}
         env:
           DCMVIEW_PY_BUNDLE_BINARY: ${{ github.workspace }}/target/release/${{ matrix.binary_name }}
           DCMVIEW_PY_WHEEL_PLAT_NAME: ${{ matrix.wheel_plat_name }}
@@ -61,6 +69,11 @@ jobs:
         run: |
           python -m pip install build wheel
           python -m build --wheel
+      - name: Verify wheel name and installed CLI
+        run: >
+          python scripts/verify_wheel_install.py
+          "$(find dist -maxdepth 1 -name '*${{ matrix.wheel_plat_name }}*.whl' | head -n 1)"
+          --expected-platform ${{ matrix.wheel_plat_name }}
       - name: Package release archive
         env:
           VERSION: ${{ github.ref_name }}
