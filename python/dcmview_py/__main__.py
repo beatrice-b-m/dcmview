@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
-from typing import Sequence
+from typing import Optional, Sequence
 
 from .wrapper import view
 
@@ -23,7 +23,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	return parser
 
 
-def run_cli(argv: Sequence[str] | None = None) -> int:
+def run_cli(argv: Optional[Sequence[str]] = None) -> int:
 	parser = _build_parser()
 	args = parser.parse_args(argv)
 

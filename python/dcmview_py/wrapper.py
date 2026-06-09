@@ -7,19 +7,20 @@ import subprocess
 import sys
 import threading
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Optional, Union
 
 _STARTUP_PREFIX = "dcmview: server running at "
 _URL_WAIT_SECONDS = 5.0
 _STOP_TIMEOUT_SECONDS = 5.0
+_BINARY_ENV = "DCMVIEW_BINARY"
 
-PathInput = str | os.PathLike[str]
+PathInput = Union[str, os.PathLike[str]]
 
 
 class _OutputMonitor:
 	def __init__(self, process: subprocess.Popen[str]) -> None:
 		self._process = process
-		self._url: str | None = None
+		self._url: Optional[str] = None
 		self._url_lock = threading.Lock()
 		self._url_ready = threading.Event()
 		self._thread = threading.Thread(target=self._run, name="dcmview-py-output", daemon=True)
@@ -30,12 +31,12 @@ class _OutputMonitor:
 	def join(self) -> None:
 		self._thread.join()
 
-	def wait_for_url(self, timeout: float) -> str | None:
+	def wait_for_url(self, timeout: float) -> Optional[str]:
 		self._url_ready.wait(timeout)
 		return self.url
 
 	@property
-	def url(self) -> str | None:
+	def url(self) -> Optional[str]:
 		with self._url_lock:
 			return self._url
 
@@ -70,7 +71,7 @@ class ShutdownHandle:
 		self._monitor = monitor
 
 	@property
-	def url(self) -> str | None:
+	def url(self) -> Optional[str]:
 		return self._monitor.url
 
 	def stop(self, timeout: float = _STOP_TIMEOUT_SECONDS) -> int:
@@ -110,13 +111,13 @@ def view(
 	host: str = "127.0.0.1",
 	browser: bool = True,
 	tunnel: bool = False,
-	tunnel_host: str | None = None,
+	tunnel_host: Optional[str] = None,
 	tunnel_port: int = 0,
 	block: bool = True,
 	recursive: bool = True,
-	timeout: int | None = None,
-	annotations: PathInput | None = None,
-) -> ShutdownHandle | None:
+	timeout: Optional[int] = None,
+	annotations: Optional[PathInput] = None,
+) -> Optional[ShutdownHandle]:
 	"""Launch dcmview for one or more filesystem paths."""
 
 	paths = _normalize_files(files)
@@ -176,7 +177,7 @@ def _normalize_files(files: PathInput | Iterable[PathInput]) -> list[str]:
 	return normalized
 
 
-def _normalize_optional_path(path: PathInput | None, *, field_name: str) -> str | None:
+def _normalize_optional_path(path: Optional[PathInput], *, field_name: str) -> Optional[str]:
 	if path is None:
 		return None
 	if not isinstance(path, (str, os.PathLike)):
@@ -191,15 +192,13 @@ def _build_command(
 	host: str,
 	browser: bool,
 	tunnel: bool,
-	tunnel_host: str | None,
+	tunnel_host: Optional[str],
 	tunnel_port: int,
 	recursive: bool,
-	timeout: int | None,
-	annotations: str | None,
+	timeout: Optional[int],
+	annotations: Optional[str],
 ) -> list[str]:
-	binary = shutil.which("dcmview")
-	if binary is None:
-		raise RuntimeError("dcmview binary not found — install with: cargo install dcmview")
+	binary = _resolve_binary()
 	if tunnel and not tunnel_host:
 		raise ValueError("tunnel_host is required when tunnel=True")
 
@@ -217,3 +216,36 @@ def _build_command(
 		command.extend(["--annotations", annotations])
 	command.extend(paths)
 	return command
+
+
+def _resolve_binary() -> str:
+	configured = os.environ.get(_BINARY_ENV)
+	if configured:
+		candidate = Path(configured).expanduser()
+		if candidate.is_file():
+			_ensure_executable(candidate)
+			return str(candidate)
+		raise RuntimeError(f"{_BINARY_ENV} points to a missing file: {candidate}")
+
+	bundled_name = "dcmview.exe" if os.name == "nt" else "dcmview"
+	bundled = Path(__file__).resolve().parent / "bin" / bundled_name
+	if bundled.is_file():
+		_ensure_executable(bundled)
+		return str(bundled)
+
+	path_binary = shutil.which("dcmview")
+	if path_binary is not None:
+		return path_binary
+
+	raise RuntimeError(
+		"dcmview binary not found — install a bundled wheel or install the Rust binary separately"
+	)
+
+
+def _ensure_executable(path: Path) -> None:
+	if os.name == "nt" or os.access(path, os.X_OK):
+		return
+
+	mode = path.stat().st_mode
+	exec_bits = (mode & 0o444) >> 2
+	path.chmod(mode | exec_bits)

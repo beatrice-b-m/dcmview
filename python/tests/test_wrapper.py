@@ -7,6 +7,7 @@ import sys
 import time
 import unittest
 from pathlib import Path
+from typing import Optional
 from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -20,7 +21,7 @@ from dcmview_py import wrapper
 FIXTURE_FILE = REPO_ROOT / "FFDM_R_MLO_ComboHD.dcm"
 
 
-def _available_dcmview_binary() -> Path | None:
+def _available_dcmview_binary() -> Optional[Path]:
 	for candidate in [
 		REPO_ROOT / "target" / "debug" / "dcmview",
 		REPO_ROOT / "target" / "release" / "dcmview",
@@ -36,9 +37,47 @@ def _available_dcmview_binary() -> Path | None:
 
 class WrapperTests(unittest.TestCase):
 	def test_missing_binary_raises_runtime_error(self) -> None:
-		with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):
-			with self.assertRaisesRegex(RuntimeError, "dcmview binary not found"):
-				wrapper.view([FIXTURE_FILE], browser=False)
+		with mock.patch.dict(os.environ, {}, clear=True):
+			with mock.patch("dcmview_py.wrapper.shutil.which", return_value=None):
+				with self.assertRaisesRegex(RuntimeError, "dcmview binary not found"):
+					wrapper.view([FIXTURE_FILE], browser=False)
+
+	def test_explicit_binary_env_var_takes_precedence(self) -> None:
+		with mock.patch.dict(os.environ, {"DCMVIEW_BINARY": "/tmp/env-dcmview"}, clear=True):
+			with mock.patch.object(wrapper.Path, "is_file", return_value=True):
+				with mock.patch("dcmview_py.wrapper._ensure_executable") as ensure_mock:
+					command = wrapper._build_command(
+						["/tmp/scan.dcm"],
+						port=0,
+						host="127.0.0.1",
+						browser=True,
+						tunnel=False,
+						tunnel_host=None,
+						tunnel_port=0,
+						recursive=True,
+						timeout=None,
+						annotations=None,
+					)
+
+		self.assertEqual(command[0], "/tmp/env-dcmview")
+		ensure_mock.assert_called_once()
+
+	def test_prefers_bundled_binary_before_path_lookup(self) -> None:
+		bundled = (PYTHON_SRC / "dcmview_py" / "bin" / "dcmview").resolve()
+		with mock.patch.dict(os.environ, {}, clear=True):
+			with mock.patch.object(wrapper.Path, "is_file", return_value=True):
+				with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/usr/local/bin/dcmview"):
+					with mock.patch("dcmview_py.wrapper._ensure_executable") as ensure_mock:
+						resolved = wrapper._resolve_binary()
+
+		self.assertEqual(resolved, str(bundled))
+		ensure_mock.assert_called_once()
+
+	def test_missing_explicit_binary_env_var_raises(self) -> None:
+		with mock.patch.dict(os.environ, {"DCMVIEW_BINARY": "/tmp/missing-dcmview"}, clear=True):
+			with mock.patch.object(wrapper.Path, "is_file", return_value=False):
+				with self.assertRaisesRegex(RuntimeError, "points to a missing file"):
+					wrapper._resolve_binary()
 
 	def test_tunnel_requires_host_before_spawn(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
