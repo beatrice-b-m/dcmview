@@ -28,7 +28,7 @@
 	import { DEFAULT_ORIENTATION, type ActiveTool, type ImageOrientation } from "./viewerTools";
 
 	type PipelineMode = "cine" | "diagnostic_wl";
-	type TransformState = { scale: number; tx: number; ty: number };
+	type TransformState = { scale: number; tx: number; ty: number; fit: boolean };
 	type DragState =
 		| { mode: "pan"; startX: number; startY: number; baseTx: number; baseTy: number }
 		| { mode: "wl"; startX: number; startY: number; baseCenter: number; baseWidth: number }
@@ -88,6 +88,7 @@
 	let liveWindowCenter = $state<number | null>(null);
 	let liveWindowWidth = $state<number | null>(null);
 	let viewportEl: HTMLElement | undefined = $state();
+	let viewportSize = $state({ width: 0, height: 0 });
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let roiSvgEl: SVGSVGElement | undefined = $state();
 	let wheelAccum = $state(0);
@@ -125,7 +126,10 @@
 		reject: (error: Error) => void;
 	}>();
 
-	const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8];
+	const MIN_ZOOM = 0.05;
+	const MAX_ZOOM = 64;
+	const ZOOM_STEPS = [0.05, 0.1, 0.2, 0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 3, 4, 6, 8, 12, 16, 24, 32, 48, 64];
+	const DEFAULT_TRANSFORM: TransformState = { scale: 1, tx: 0, ty: 0, fit: false };
 	const MAX_RENDER_PIXELS = 20_000_000;
 	const RAW_CACHE_BYTE_BUDGET = 256 * 1024 * 1024;
 	const RAW_RING_RADIUS = 10;
@@ -142,7 +146,7 @@
 	const WHEEL_FRAME_THRESHOLD = 30 / FRAME_SCROLL_SPEED_FACTOR;
 	const DRAG_PIXELS_PER_FRAME = 10 / FRAME_SCROLL_SPEED_FACTOR;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
-	const activeTransform = $derived(transformsByFile[activeFileIndex] ?? { scale: 1, tx: 0, ty: 0 });
+	const activeTransform = $derived(activeFile ? transformsByFile[activeFile.index] ?? DEFAULT_TRANSFORM : DEFAULT_TRANSFORM);
 	const transformCss = $derived.by(() => {
 		const { tx, ty, scale } = activeTransform;
 		let css = `translate(${tx}px, ${ty}px) scale(${scale})`;
@@ -1096,11 +1100,56 @@ function startDisplayPrefetch(
 		}
 	}
 
-	function updateTransform(index: number, transform: TransformState) {
+	function sameTransform(a: TransformState | undefined, b: TransformState): boolean {
+		return !!a
+			&& a.fit === b.fit
+			&& Math.abs(a.scale - b.scale) < 0.0001
+			&& Math.abs(a.tx - b.tx) < 0.01
+			&& Math.abs(a.ty - b.ty) < 0.01;
+	}
+
+	function updateTransform(index: number, transform: Omit<TransformState, "fit"> | TransformState, fit = false) {
+		const next = { scale: transform.scale, tx: transform.tx, ty: transform.ty, fit };
+		if (sameTransform(transformsByFile[index], next)) return;
 		transformsByFile = {
 			...transformsByFile,
-			[index]: transform,
+			[index]: next,
 		};
+	}
+
+	function clampZoom(scale: number): number {
+		return Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, scale));
+	}
+
+	function fitTransformForViewport(): TransformState | null {
+		if (imageRows <= 0 || imageColumns <= 0 || viewportSize.height <= 0) return null;
+		const scale = Math.max(MIN_ZOOM, viewportSize.height / imageRows);
+		return {
+			scale,
+			tx: imageColumns * (1 - scale) / 2,
+			ty: imageRows * (1 - scale) / 2,
+			fit: true,
+		};
+	}
+
+	function fitActiveImageToViewport(): void {
+		if (!activeFile) return;
+		const transform = fitTransformForViewport();
+		if (!transform) return;
+		updateTransform(activeFile.index, transform, true);
+	}
+
+	function imageLayoutOrigin(): { left: number; top: number } | null {
+		if (!viewportEl || imageColumns <= 0 || imageRows <= 0) return null;
+		const rect = viewportEl.getBoundingClientRect();
+		return {
+			left: rect.left + (rect.width - imageColumns) / 2,
+			top: rect.top + (rect.height - imageRows) / 2,
+		};
+	}
+
+	function isViewportChromeTarget(target: EventTarget | null): boolean {
+		return target instanceof Element && !!target.closest(".zoom-controls, .roi-list");
 	}
 
 	$effect(() => {
@@ -1112,12 +1161,21 @@ function startDisplayPrefetch(
 	});
 
 	$effect(() => {
-		if (activeFile && !transformsByFile[activeFile.index]) {
-			transformsByFile = {
-				...transformsByFile,
-				[activeFile.index]: { scale: 1, tx: 0, ty: 0 },
-			};
-		}
+		if (!activeFile?.has_pixels) return;
+		const existing = transformsByFile[activeFile.index];
+		if (!existing || existing.fit) fitActiveImageToViewport();
+	});
+
+	$effect(() => {
+		if (!viewportEl) return;
+		const updateViewportSize = () => {
+			const rect = viewportEl.getBoundingClientRect();
+			viewportSize = { width: rect.width, height: rect.height };
+		};
+		updateViewportSize();
+		const observer = new ResizeObserver(updateViewportSize);
+		observer.observe(viewportEl);
+		return () => observer.disconnect();
 	});
 
 	$effect(() => {
@@ -1293,9 +1351,7 @@ function startDisplayPrefetch(
 		if (resetCount === lastHandledResetCount) return;
 		lastHandledResetCount = resetCount;
 		if (resetCount === 0) return;
-		if (activeFile) {
-			updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
-		}
+		fitActiveImageToViewport();
 		liveWindowCenter = null;
 		liveWindowWidth = null;
 		dragState = null;
@@ -1310,21 +1366,21 @@ function startDisplayPrefetch(
 	function zoomAt(newScale: number, clientX: number, clientY: number) {
 		if (!activeFile || !canvasEl) return;
 		const { scale, tx, ty } = activeTransform;
-		const clamped = Math.min(8, Math.max(0.2, newScale));
-		const rect = canvasEl.getBoundingClientRect();
-		const lx = (clientX - rect.left) / scale;
-		const ly = (clientY - rect.top) / scale;
-		const natX = rect.left - tx;
-		const natY = rect.top - ty;
+		const clamped = clampZoom(newScale);
+		const origin = imageLayoutOrigin();
+		if (!origin) return;
+		const lx = (clientX - origin.left - tx) / scale;
+		const ly = (clientY - origin.top - ty) / scale;
 		updateTransform(activeFile.index, {
 			scale: clamped,
-			tx: clientX - natX - lx * clamped,
-			ty: clientY - natY - ly * clamped,
+			tx: clientX - origin.left - lx * clamped,
+			ty: clientY - origin.top - ly * clamped,
 		});
 	}
 
 	function onWheel(event: WheelEvent) {
 		if (!activeFile || !activeFile.has_pixels) return;
+		if (isViewportChromeTarget(event.target)) return;
 		event.preventDefault();
 
 		const isModifiedZoom = event.ctrlKey || event.metaKey;
@@ -1367,6 +1423,7 @@ function startDisplayPrefetch(
 
 	function onPointerDown(event: PointerEvent) {
 		if (!activeFile || !activeFile.has_pixels) return;
+		if (isViewportChromeTarget(event.target)) return;
 		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 
 		if (event.button === 1) {
@@ -1572,7 +1629,7 @@ function startDisplayPrefetch(
 
 	function resetViewport() {
 		if (!activeFile) return;
-		updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 });
+		fitActiveImageToViewport();
 		windowCenter = activeFile.default_window?.center ?? null;
 		windowWidth = activeFile.default_window?.width ?? null;
 		liveWindowCenter = null;
@@ -1704,9 +1761,9 @@ function startDisplayPrefetch(
 			{/if}
 		</div>
 		<div class="zoom-controls">
-			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= ZOOM_STEPS[0]}>−</button>
-			<button type="button" class="zoom-level" onclick={() => { if (activeFile) updateTransform(activeFile.index, { scale: 1, tx: 0, ty: 0 }); }}>{zoomPercent}%</button>
-			<button type="button" onclick={() => stepZoom(1)} disabled={activeTransform.scale >= ZOOM_STEPS[ZOOM_STEPS.length - 1]}>+</button>
+			<button type="button" onclick={() => stepZoom(-1)} disabled={activeTransform.scale <= MIN_ZOOM}>−</button>
+			<button type="button" class="zoom-level" onclick={fitActiveImageToViewport} title="Fit to height">{zoomPercent}%</button>
+			<button type="button" onclick={() => stepZoom(1)} disabled={activeTransform.scale >= MAX_ZOOM}>+</button>
 		</div>
 	{/if}
 </section>
