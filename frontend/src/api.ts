@@ -9,6 +9,17 @@ export interface FileSummary {
 	index: number;
 	path: string;
 	label: string;
+	patient_id: string;
+	patient_name: string;
+	study_instance_uid: string;
+	study_date: string;
+	study_description: string;
+	series_instance_uid: string;
+	series_number: string;
+	series_description: string;
+	modality: string;
+	instance_number: string;
+	sop_instance_uid: string;
 	has_pixels: boolean;
 	frame_count: number;
 	rows: number;

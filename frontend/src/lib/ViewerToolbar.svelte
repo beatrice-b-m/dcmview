@@ -65,10 +65,13 @@
 		padding: 0.4rem 0.75rem;
 		background: #242424;
 		border-bottom: 1px solid #333;
+		min-width: 0;
+		flex-wrap: wrap;
 	}
 	.tool-group {
 		display: flex;
 		gap: 2px;
+		flex: 0 0 auto;
 	}
 	.transform-group {
 		margin-left: auto;
@@ -104,5 +107,11 @@
 		height: 1.2rem;
 		background: #3a3a3a;
 		margin: 0 0.25rem;
+	}
+
+	@media (max-width: 760px) {
+		.transform-group {
+			margin-left: 0;
+		}
 	}
 </style>

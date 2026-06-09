@@ -138,8 +138,10 @@
 <style>
 	.slider {
 		display: flex;
-		gap: 0.75rem;
+		flex-wrap: wrap;
+		gap: 0.45rem 0.65rem;
 		align-items: center;
+		min-width: 0;
 		padding: 0.6rem 1rem;
 		background: #242424;
 		border-top: 1px solid #333;
