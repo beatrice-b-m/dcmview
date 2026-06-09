@@ -5,6 +5,9 @@ build/
 dist/
 frontend/node_modules/
 frontend/dist/
+vscode/node_modules/
+vscode/out/
+.vscode-test/
 
 *.dcm
 *.dicom
