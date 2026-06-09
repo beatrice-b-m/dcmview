@@ -16,7 +16,7 @@ use dicom_core::header::HasLength;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_object::{open_file, InMemDicomObject};
 use rust_embed::RustEmbed;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -54,7 +54,23 @@ pub struct ServerConfig {
     pub port: u16,
     pub timeout_seconds: Option<u64>,
     pub open_browser: bool,
+    pub startup_json: bool,
     pub tunnel: Option<TunnelConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct StartupEvent<'a> {
+    r#type: &'a str,
+    url: &'a str,
+    host: &'a str,
+    port: u16,
+}
+
+#[derive(Debug, Serialize)]
+struct HealthResponse {
+    status: &'static str,
+    file_count: usize,
+    server_start_ms: u64,
 }
 
 #[derive(Debug, Deserialize)]
@@ -79,6 +95,13 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
     let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
 
     println!("dcmview: server running at {server_url}");
+    if config.startup_json {
+        println!(
+            "{}",
+            startup_event_json(&server_url, &config.host, local_addr.port())
+                .context("failed to serialize startup event")?
+        );
+    }
     if is_non_loopback_bind(local_addr.ip()) {
         eprintln!(
 			"dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",
@@ -151,6 +174,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(index_handler))
         .route("/assets/{*path}", get(asset_handler))
+        .route("/api/health", get(health_handler))
         .route("/api/files", get(files_handler))
         .route("/api/file/{index}/info", get(info_handler))
         .route("/api/file/{index}/frame/{frame}", get(frame_handler))
@@ -168,6 +192,24 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/file/{index}/tags", get(tags_handler))
         .with_state(state)
+}
+
+pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json::Result<String> {
+    serde_json::to_string(&StartupEvent {
+        r#type: "server_started",
+        url: server_url,
+        host,
+        port,
+    })
+}
+
+async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
+    touch_request(&state);
+    Json(HealthResponse {
+        status: "ok",
+        file_count: state.files.len(),
+        server_start_ms: state.server_start_ms,
+    })
 }
 
 async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {

@@ -2,8 +2,25 @@ use super::support;
 use axum::http::{header, HeaderValue};
 use axum_test::TestServer;
 use dcmview::server;
-use serde_json::Value;
+use serde_json::{json, Value};
 use tempfile::tempdir;
+
+#[test]
+fn startup_event_json_uses_stable_extension_contract() {
+    let line = server::startup_event_json("http://127.0.0.1:49321", "127.0.0.1", 49321)
+        .expect("serialize startup event");
+    let event: Value = serde_json::from_str(&line).expect("startup event should be valid JSON");
+
+    assert_eq!(
+        event,
+        json!({
+            "type": "server_started",
+            "url": "http://127.0.0.1:49321",
+            "host": "127.0.0.1",
+            "port": 49321
+        })
+    );
+}
 
 #[tokio::test]
 async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
@@ -66,6 +83,29 @@ async fn exposes_files_info_and_frame_endpoints_with_cache_headers() {
             .to_str()
             .expect("cache header"),
         "HIT"
+    );
+}
+
+#[tokio::test]
+async fn health_endpoint_reports_ready_state() {
+    let app = server::router(support::app_state(vec![support::file_entry(
+        "fixture.dcm".into(),
+        "1.2.840.10008.1.2.1",
+        1,
+    )]));
+    let test_server = TestServer::new(app);
+
+    let response = test_server.get("/api/health").await;
+    response.assert_status_ok();
+    let health: Value = response.json();
+
+    assert_eq!(health["status"], "ok");
+    assert_eq!(health["file_count"], 1);
+    assert!(
+        health["server_start_ms"]
+            .as_u64()
+            .expect("server_start_ms should be a number")
+            > 0
     );
 }
 

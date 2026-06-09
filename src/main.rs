@@ -43,6 +43,9 @@ struct Cli {
 
     #[arg(long = "annotations")]
     annotations: Option<PathBuf>,
+
+    #[arg(long = "startup-json")]
+    startup_json: bool,
 }
 
 #[tokio::main]
@@ -110,6 +113,7 @@ async fn run() -> Result<()> {
             port: cli.port,
             timeout_seconds: cli.timeout,
             open_browser: !cli.no_browser,
+            startup_json: cli.startup_json,
             tunnel,
         },
         state,
