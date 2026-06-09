@@ -81,7 +81,11 @@ async fn serves_annotations_loaded_from_csv_for_matching_file() {
     let dcm_path = dir.path().join("annotated.dcm");
     let csv_path = dir.path().join("annotations.csv");
 
-    support::write_encapsulated_dicom(&dcm_path, "1.2.840.10008.1.2.4.50", vec![vec![0u8; 16 * 16]]);
+    support::write_encapsulated_dicom(
+        &dcm_path,
+        "1.2.840.10008.1.2.4.50",
+        vec![vec![0u8; 16 * 16]],
+    );
 
     fs::write(
         &csv_path,
@@ -119,11 +123,8 @@ async fn serves_annotations_loaded_from_csv_for_matching_file() {
 #[tokio::test]
 async fn put_replaces_annotations_and_canonicalizes_payload() {
     let dir = tempdir().expect("temp dir");
-    let mut entry = support::file_entry(
-        dir.path().join("editable.dcm"),
-        "1.2.840.10008.1.2.4.50",
-        4,
-    );
+    let mut entry =
+        support::file_entry(dir.path().join("editable.dcm"), "1.2.840.10008.1.2.4.50", 4);
     entry.rows = 100;
     entry.columns = 120;
     let app = server::router(support::app_state(vec![entry]));
@@ -147,17 +148,17 @@ async fn put_replaces_annotations_and_canonicalizes_payload() {
     get_response.assert_status_ok();
     let get_body: Value = get_response.json();
     assert_eq!(get_body["num_roi"], 1);
-    assert_eq!(get_body["roi_coords"][0], serde_json::json!([10, 20, 30, 40]));
+    assert_eq!(
+        get_body["roi_coords"][0],
+        serde_json::json!([10, 20, 30, 40])
+    );
 }
 
 #[tokio::test]
 async fn put_rejects_out_of_bounds_coords_and_frames() {
     let dir = tempdir().expect("temp dir");
-    let mut entry = support::file_entry(
-        dir.path().join("editable.dcm"),
-        "1.2.840.10008.1.2.4.50",
-        2,
-    );
+    let mut entry =
+        support::file_entry(dir.path().join("editable.dcm"), "1.2.840.10008.1.2.4.50", 2);
     entry.rows = 16;
     entry.columns = 16;
     let app = server::router(support::app_state(vec![entry]));
@@ -173,7 +174,10 @@ async fn put_rejects_out_of_bounds_coords_and_frames() {
         .await;
     bounds_response.assert_status_bad_request();
     let bounds_body: Value = bounds_response.json();
-    assert!(bounds_body["error"].as_str().unwrap_or_default().contains("exceeds image bounds"));
+    assert!(bounds_body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("exceeds image bounds"));
 
     let frame_response = test_server
         .put("/api/file/0/annotations")
@@ -185,17 +189,17 @@ async fn put_rejects_out_of_bounds_coords_and_frames() {
         .await;
     frame_response.assert_status_bad_request();
     let frame_body: Value = frame_response.json();
-    assert!(frame_body["error"].as_str().unwrap_or_default().contains("contains frame 2"));
+    assert!(frame_body["error"]
+        .as_str()
+        .unwrap_or_default()
+        .contains("contains frame 2"));
 }
 
 #[tokio::test]
 async fn export_csv_returns_current_in_memory_annotations() {
     let dir = tempdir().expect("temp dir");
-    let mut entry = support::file_entry(
-        dir.path().join("exported.dcm"),
-        "1.2.840.10008.1.2.4.50",
-        3,
-    );
+    let mut entry =
+        support::file_entry(dir.path().join("exported.dcm"), "1.2.840.10008.1.2.4.50", 3);
     entry.rows = 64;
     entry.columns = 64;
     let app = server::router(support::app_state(vec![entry]));

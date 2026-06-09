@@ -39,7 +39,11 @@ jobs:
       - name: Check package versions
         run: python scripts/check_versions.py
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
       - name: Regenerate committed fixtures
         run: cargo run --example generate_test_fixtures
       - name: Check fixture drift

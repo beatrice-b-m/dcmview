@@ -1,7 +1,10 @@
 use crate::annotations::{AnnotationStore, EmbedRoiAnnotations};
 use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameRequest};
 use crate::tunnel::{self, TunnelHandle};
-use crate::types::{ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo, WindowMode};
+use crate::types::{
+    ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo,
+    WindowMode,
+};
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
@@ -22,43 +25,43 @@ use tokio::net::TcpListener;
 
 #[derive(Clone)]
 pub struct AppState {
-	pub files: Arc<Vec<FileEntry>>,
-	pub file_summaries: Arc<Vec<FileSummary>>,
-	pub pixel_cache: Arc<Mutex<FrameCache>>,
-	pub raw_cache: Arc<Mutex<RawFrameCache>>,
-	pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
-	pub annotations: AnnotationStore,
-	pub tunnel_info: Option<Arc<TunnelInfo>>,
-	pub tunnel_handle: Option<Arc<TunnelHandle>>,
-	pub server_start: Instant,
-	pub server_start_ms: u64,
-	pub last_request: Arc<AtomicU64>,
+    pub files: Arc<Vec<FileEntry>>,
+    pub file_summaries: Arc<Vec<FileSummary>>,
+    pub pixel_cache: Arc<Mutex<FrameCache>>,
+    pub raw_cache: Arc<Mutex<RawFrameCache>>,
+    pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
+    pub annotations: AnnotationStore,
+    pub tunnel_info: Option<Arc<TunnelInfo>>,
+    pub tunnel_handle: Option<Arc<TunnelHandle>>,
+    pub server_start: Instant,
+    pub server_start_ms: u64,
+    pub last_request: Arc<AtomicU64>,
 }
 
 pub fn file_summaries(files: &[FileEntry]) -> Arc<Vec<FileSummary>> {
-	Arc::new(files.iter().map(FileSummary::from).collect())
+    Arc::new(files.iter().map(FileSummary::from).collect())
 }
 
 #[derive(Debug, Clone)]
 pub struct TunnelConfig {
-	pub host: String,
-	pub port: u16,
+    pub host: String,
+    pub port: u16,
 }
 
 #[derive(Debug, Clone)]
 pub struct ServerConfig {
-	pub host: String,
-	pub port: u16,
-	pub timeout_seconds: Option<u64>,
-	pub open_browser: bool,
-	pub tunnel: Option<TunnelConfig>,
+    pub host: String,
+    pub port: u16,
+    pub timeout_seconds: Option<u64>,
+    pub open_browser: bool,
+    pub tunnel: Option<TunnelConfig>,
 }
 
 #[derive(Debug, Deserialize)]
 struct FrameQuery {
-	wc: Option<f64>,
-	ww: Option<f64>,
-	mode: Option<WindowMode>,
+    wc: Option<f64>,
+    ww: Option<f64>,
+    mode: Option<WindowMode>,
 }
 
 #[derive(RustEmbed)]
@@ -66,320 +69,373 @@ struct FrameQuery {
 struct FrontendAssets;
 
 pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
-	let bind_addr = format!("{}:{}", config.host, config.port);
-	let listener = TcpListener::bind(&bind_addr)
-		.await
-		.with_context(|| format!("failed to bind to {bind_addr}"))?;
-	let local_addr = listener.local_addr().context("failed to read local bind address")?;
-	let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
+    let bind_addr = format!("{}:{}", config.host, config.port);
+    let listener = TcpListener::bind(&bind_addr)
+        .await
+        .with_context(|| format!("failed to bind to {bind_addr}"))?;
+    let local_addr = listener
+        .local_addr()
+        .context("failed to read local bind address")?;
+    let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
 
-	println!("dcmview: server running at {server_url}");
-	if is_non_loopback_bind(local_addr.ip()) {
-		eprintln!(
+    println!("dcmview: server running at {server_url}");
+    if is_non_loopback_bind(local_addr.ip()) {
+        eprintln!(
 			"dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",
 			local_addr.ip()
 		);
-		eprintln!("dcmview: warning — prefer --host 127.0.0.1 (or ::1) and use --tunnel for remote access");
-	}
+        eprintln!("dcmview: warning — prefer --host 127.0.0.1 (or ::1) and use --tunnel for remote access");
+    }
 
-
-	if let Some(tunnel_cfg) = config.tunnel {
-		let runtime = tunnel::start_tunnel(local_addr.port(), tunnel_cfg.host.clone(), tunnel_cfg.port)?;
-		if let Some(warning) = runtime.warning.as_deref() {
-			eprintln!("{warning}");
-			eprintln!("dcmview: to forward manually, run on your local machine:");
-			eprintln!(
-				"dcmview:   ssh -L {0}:localhost:{0} {1}",
-				runtime.info.tunnel_port, runtime.info.tunnel_host
-			);
-		} else {
-			println!(
-				"dcmview: SSH tunnel active — access at http://localhost:{} on your local machine",
-				runtime.info.tunnel_port
-			);
-		}
-		state.tunnel_info = Some(Arc::new(runtime.info));
-		state.tunnel_handle = runtime.handle.map(Arc::new);
-	} else {
-		println!(
+    if let Some(tunnel_cfg) = config.tunnel {
+        let runtime =
+            tunnel::start_tunnel(local_addr.port(), tunnel_cfg.host.clone(), tunnel_cfg.port)?;
+        if let Some(warning) = runtime.warning.as_deref() {
+            eprintln!("{warning}");
+            eprintln!("dcmview: to forward manually, run on your local machine:");
+            eprintln!(
+                "dcmview:   ssh -L {0}:localhost:{0} {1}",
+                runtime.info.tunnel_port, runtime.info.tunnel_host
+            );
+        } else {
+            println!(
+                "dcmview: SSH tunnel active — access at http://localhost:{} on your local machine",
+                runtime.info.tunnel_port
+            );
+        }
+        state.tunnel_info = Some(Arc::new(runtime.info));
+        state.tunnel_handle = runtime.handle.map(Arc::new);
+    } else {
+        println!(
 			"dcmview: (on a remote server? run on your local machine: ssh -L {0}:localhost:{0} user@host)",
 			local_addr.port()
 		);
-	}
+    }
 
-	if config.open_browser {
-		if let Err(error) = open::that(&server_url) {
-			eprintln!("dcmview: warning — failed to open browser: {error}");
-		}
-	}
+    if config.open_browser {
+        if let Err(error) = open::that(&server_url) {
+            eprintln!("dcmview: warning — failed to open browser: {error}");
+        }
+    }
 
-	println!("dcmview: press Ctrl+C to stop");
+    println!("dcmview: press Ctrl+C to stop");
 
-	if let Some(timeout) = config.timeout_seconds {
-		spawn_idle_timeout_watcher(timeout, state.last_request.clone(), state.tunnel_handle.clone());
-	}
+    if let Some(timeout) = config.timeout_seconds {
+        spawn_idle_timeout_watcher(
+            timeout,
+            state.last_request.clone(),
+            state.tunnel_handle.clone(),
+        );
+    }
 
-	let tunnel_handle = state.tunnel_handle.clone();
-	let app = router(state);
-	axum::serve(listener, app)
-		.with_graceful_shutdown(shutdown_signal(tunnel_handle))
-		.await
-		.context("server failed")
+    let tunnel_handle = state.tunnel_handle.clone();
+    let app = router(state);
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal(tunnel_handle))
+        .await
+        .context("server failed")
 }
 
 pub fn now_unix_ms() -> u64 {
-	SystemTime::now()
-		.duration_since(UNIX_EPOCH)
-		.unwrap_or(Duration::from_secs(0))
-		.as_millis() as u64
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or(Duration::from_secs(0))
+        .as_millis() as u64
 }
 
 fn is_non_loopback_bind(ip: std::net::IpAddr) -> bool {
-	!ip.is_loopback()
+    !ip.is_loopback()
 }
 
-
 pub fn router(state: AppState) -> Router {
-	Router::new()
-		.route("/", get(index_handler))
-		.route("/assets/{*path}", get(asset_handler))
-		.route("/api/files", get(files_handler))
-		.route("/api/file/{index}/info", get(info_handler))
-		.route("/api/file/{index}/frame/{frame}", get(frame_handler))
-		.route("/api/file/{index}/frame/{frame}/raw", get(raw_frame_handler))
-		.route("/api/file/{index}/annotations", get(annotations_handler).put(update_annotations_handler))
-		.route("/api/annotations/export.csv", get(export_annotations_handler))
-		.route("/api/file/{index}/tags", get(tags_handler))
-		.with_state(state)
+    Router::new()
+        .route("/", get(index_handler))
+        .route("/assets/{*path}", get(asset_handler))
+        .route("/api/files", get(files_handler))
+        .route("/api/file/{index}/info", get(info_handler))
+        .route("/api/file/{index}/frame/{frame}", get(frame_handler))
+        .route(
+            "/api/file/{index}/frame/{frame}/raw",
+            get(raw_frame_handler),
+        )
+        .route(
+            "/api/file/{index}/annotations",
+            get(annotations_handler).put(update_annotations_handler),
+        )
+        .route(
+            "/api/annotations/export.csv",
+            get(export_annotations_handler),
+        )
+        .route("/api/file/{index}/tags", get(tags_handler))
+        .with_state(state)
 }
 
 async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
-	touch_request(&state);
-	Json(FilesResponse {
-		files: (*state.file_summaries).clone(),
-		tunnelled: state.tunnel_info.is_some(),
-		tunnel_host: state.tunnel_info.as_ref().map(|t| t.tunnel_host.clone()),
-		server_start_ms: state.server_start_ms,
-	})
+    touch_request(&state);
+    Json(FilesResponse {
+        files: (*state.file_summaries).clone(),
+        tunnelled: state.tunnel_info.is_some(),
+        tunnel_host: state.tunnel_info.as_ref().map(|t| t.tunnel_host.clone()),
+        server_start_ms: state.server_start_ms,
+    })
 }
 
-async fn info_handler(State(state): State<AppState>, Path(index): Path<usize>) -> Result<Json<FrameInfo>, ApiError> {
-	touch_request(&state);
-	let file = state
-		.files
-		.get(index)
-		.ok_or_else(|| ApiError::not_found("file index out of range"))?;
-	Ok(Json(FrameInfo {
-		frame_count: file.frame_count,
-		rows: file.rows,
-		columns: file.columns,
-		transfer_syntax: file.transfer_syntax_uid.clone(),
-		has_pixels: file.has_pixels,
-		default_window: file.default_window,
-	}))
+async fn info_handler(
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
+) -> Result<Json<FrameInfo>, ApiError> {
+    touch_request(&state);
+    let file = state
+        .files
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    Ok(Json(FrameInfo {
+        frame_count: file.frame_count,
+        rows: file.rows,
+        columns: file.columns,
+        transfer_syntax: file.transfer_syntax_uid.clone(),
+        has_pixels: file.has_pixels,
+        default_window: file.default_window,
+    }))
 }
 
 async fn annotations_handler(
-	State(state): State<AppState>,
-	Path(index): Path<usize>,
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
-	touch_request(&state);
-	if state.files.get(index).is_none() {
-		return Err(ApiError::not_found("file index out of range"));
-	}
+    touch_request(&state);
+    if state.files.get(index).is_none() {
+        return Err(ApiError::not_found("file index out of range"));
+    }
 
-	let annotations = state
-		.annotations
-		.get(index)
-		.map_err(|error| ApiError::internal(error.to_string()))?;
+    let annotations = state
+        .annotations
+        .get(index)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
 
-	Ok(Json(annotations))
+    Ok(Json(annotations))
 }
 
 async fn update_annotations_handler(
-	State(state): State<AppState>,
-	Path(index): Path<usize>,
-	Json(annotations): Json<EmbedRoiAnnotations>,
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
+    Json(annotations): Json<EmbedRoiAnnotations>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
-	touch_request(&state);
-	let file = state
-		.files
-		.get(index)
-		.ok_or_else(|| ApiError::not_found("file index out of range"))?;
+    touch_request(&state);
+    let file = state
+        .files
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
-	let canonical = state
-		.annotations
-		.replace_for_file(file, annotations)
-		.map_err(|error| ApiError::bad_request(error.to_string()))?;
+    let canonical = state
+        .annotations
+        .replace_for_file(file, annotations)
+        .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
-	Ok(Json(canonical))
+    Ok(Json(canonical))
 }
 
 async fn export_annotations_handler(State(state): State<AppState>) -> Result<Response, ApiError> {
-	touch_request(&state);
-	let csv = state
-		.annotations
-		.export_embed_csv(state.files.as_slice())
-		.map_err(|error| ApiError::internal(error.to_string()))?;
-	let mut response = Response::new(axum::body::Body::from(csv));
-	let headers = response.headers_mut();
-	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/csv; charset=utf-8"));
-	headers.insert(
-		header::CONTENT_DISPOSITION,
-		HeaderValue::from_static("attachment; filename=\"dcmview-annotations.csv\""),
-	);
-	Ok(response)
+    touch_request(&state);
+    let csv = state
+        .annotations
+        .export_embed_csv(state.files.as_slice())
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    let mut response = Response::new(axum::body::Body::from(csv));
+    let headers = response.headers_mut();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("text/csv; charset=utf-8"),
+    );
+    headers.insert(
+        header::CONTENT_DISPOSITION,
+        HeaderValue::from_static("attachment; filename=\"dcmview-annotations.csv\""),
+    );
+    Ok(response)
 }
 
 async fn frame_handler(
-	State(state): State<AppState>,
-	Path((index, frame)): Path<(usize, u32)>,
-	Query(query): Query<FrameQuery>,
-	headers: HeaderMap,
+    State(state): State<AppState>,
+    Path((index, frame)): Path<(usize, u32)>,
+    Query(query): Query<FrameQuery>,
+    headers: HeaderMap,
 ) -> Result<Response, ApiError> {
-	touch_request(&state);
-	let accept_header = headers
-		.get(header::ACCEPT)
-		.and_then(|value| value.to_str().ok())
-		.map(ToString::to_string);
+    touch_request(&state);
+    let accept_header = headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .map(ToString::to_string);
 
-	let frame_response = pixels::load_frame(
-		state.files.as_slice(),
-		state.pixel_cache.clone(),
-		FrameRequest {
-			file_index: index,
-			frame,
-			window_center: query.wc,
-			window_width: query.ww,
-			window_mode: query.mode.unwrap_or_default(),
-			accept_header,
-		},
-	)
-	.await
-	.map_err(pixel_error_to_api_error)?;
+    let frame_response = pixels::load_frame(
+        state.files.as_slice(),
+        state.pixel_cache.clone(),
+        FrameRequest {
+            file_index: index,
+            frame,
+            window_center: query.wc,
+            window_width: query.ww,
+            window_mode: query.mode.unwrap_or_default(),
+            accept_header,
+        },
+    )
+    .await
+    .map_err(pixel_error_to_api_error)?;
 
-	let mut response = Response::new(axum::body::Body::from(frame_response.body));
-	let cache_header = if frame_response.cache_hit { "HIT" } else { "MISS" };
-	response
-		.headers_mut()
-		.insert("X-Cache", HeaderValue::from_static(cache_header));
-	response
-		.headers_mut()
-		.insert(header::CONTENT_TYPE, HeaderValue::from_static(frame_response.content_type));
-	Ok(response)
+    let mut response = Response::new(axum::body::Body::from(frame_response.body));
+    let cache_header = if frame_response.cache_hit {
+        "HIT"
+    } else {
+        "MISS"
+    };
+    response
+        .headers_mut()
+        .insert("X-Cache", HeaderValue::from_static(cache_header));
+    response.headers_mut().insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static(frame_response.content_type),
+    );
+    Ok(response)
 }
 
 async fn raw_frame_handler(
-	State(state): State<AppState>,
-	Path((index, frame)): Path<(usize, u32)>,
+    State(state): State<AppState>,
+    Path((index, frame)): Path<(usize, u32)>,
 ) -> Result<Response, ApiError> {
-	touch_request(&state);
+    touch_request(&state);
 
-	let raw_response = pixels::load_raw_frame(
-		state.files.as_slice(),
-		state.raw_cache.clone(),
-		RawFrameRequest {
-			file_index: index,
-			frame,
-		},
-	)
-	.await
-	.map_err(pixel_error_to_api_error)?;
+    let raw_response = pixels::load_raw_frame(
+        state.files.as_slice(),
+        state.raw_cache.clone(),
+        RawFrameRequest {
+            file_index: index,
+            frame,
+        },
+    )
+    .await
+    .map_err(pixel_error_to_api_error)?;
 
-	let meta = &raw_response.metadata;
-	let cache_header = if raw_response.cache_hit { "HIT" } else { "MISS" };
+    let meta = &raw_response.metadata;
+    let cache_header = if raw_response.cache_hit {
+        "HIT"
+    } else {
+        "MISS"
+    };
 
-	let mut response = Response::new(axum::body::Body::from(raw_response.body));
-	let headers = response.headers_mut();
-	headers.insert("X-Cache", HeaderValue::from_static(cache_header));
-	headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("application/octet-stream"));
-	insert_header_if_valid(headers, "X-Frame-Rows", meta.rows.to_string());
-	insert_header_if_valid(headers, "X-Frame-Columns", meta.columns.to_string());
-	insert_header_if_valid(headers, "X-Frame-Bits-Allocated", meta.bits_allocated.to_string());
-	insert_header_if_valid(
-		headers,
-		"X-Frame-Pixel-Representation",
-		meta.pixel_representation.to_string(),
-	);
-	insert_header_if_valid(headers, "X-Frame-Samples-Per-Pixel", meta.samples_per_pixel.to_string());
-	insert_header_if_valid(
-		headers,
-		"X-Frame-Photometric-Interpretation",
-		meta.photometric_interpretation.clone(),
-	);
-	insert_header_if_valid(headers, "X-Frame-Rescale-Slope", meta.rescale_slope.to_string());
-	insert_header_if_valid(
-		headers,
-		"X-Frame-Rescale-Intercept",
-		meta.rescale_intercept.to_string(),
-	);
-	if let Some(wc) = meta.default_wc {
-		insert_header_if_valid(headers, "X-Frame-Default-Wc", wc.to_string());
-	}
-	if let Some(ww) = meta.default_ww {
-		insert_header_if_valid(headers, "X-Frame-Default-Ww", ww.to_string());
-	}
+    let mut response = Response::new(axum::body::Body::from(raw_response.body));
+    let headers = response.headers_mut();
+    headers.insert("X-Cache", HeaderValue::from_static(cache_header));
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    insert_header_if_valid(headers, "X-Frame-Rows", meta.rows.to_string());
+    insert_header_if_valid(headers, "X-Frame-Columns", meta.columns.to_string());
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Bits-Allocated",
+        meta.bits_allocated.to_string(),
+    );
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Pixel-Representation",
+        meta.pixel_representation.to_string(),
+    );
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Samples-Per-Pixel",
+        meta.samples_per_pixel.to_string(),
+    );
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Photometric-Interpretation",
+        meta.photometric_interpretation.clone(),
+    );
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Rescale-Slope",
+        meta.rescale_slope.to_string(),
+    );
+    insert_header_if_valid(
+        headers,
+        "X-Frame-Rescale-Intercept",
+        meta.rescale_intercept.to_string(),
+    );
+    if let Some(wc) = meta.default_wc {
+        insert_header_if_valid(headers, "X-Frame-Default-Wc", wc.to_string());
+    }
+    if let Some(ww) = meta.default_ww {
+        insert_header_if_valid(headers, "X-Frame-Default-Ww", ww.to_string());
+    }
 
-	Ok(response)
+    Ok(response)
 }
 
-async fn tags_handler(State(state): State<AppState>, Path(index): Path<usize>) -> Result<Json<Vec<TagNode>>, ApiError> {
-	touch_request(&state);
-	let file = state
-		.files
-		.get(index)
-		.ok_or_else(|| ApiError::not_found("file index out of range"))?;
+async fn tags_handler(
+    State(state): State<AppState>,
+    Path(index): Path<usize>,
+) -> Result<Json<Vec<TagNode>>, ApiError> {
+    touch_request(&state);
+    let file = state
+        .files
+        .get(index)
+        .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
-	if let Ok(cache) = state.tag_cache.lock() {
-		if let Some(nodes) = cache.get(&index).cloned() {
-			return Ok(Json(nodes));
-		}
-	}
+    if let Ok(cache) = state.tag_cache.lock() {
+        if let Some(nodes) = cache.get(&index).cloned() {
+            return Ok(Json(nodes));
+        }
+    }
 
-	let path = file.path.clone();
-	let nodes = tokio::task::spawn_blocking(move || build_tag_tree(&path))
-		.await
-		.map_err(|error| ApiError::internal(format!("tag serialization task failed: {error}")))?
-		.map_err(|error| ApiError::internal(format!("tag serialization failed: {error}")))?;
+    let path = file.path.clone();
+    let nodes = tokio::task::spawn_blocking(move || build_tag_tree(&path))
+        .await
+        .map_err(|error| ApiError::internal(format!("tag serialization task failed: {error}")))?
+        .map_err(|error| ApiError::internal(format!("tag serialization failed: {error}")))?;
 
-	if let Ok(mut cache) = state.tag_cache.lock() {
-		cache.insert(index, nodes.clone());
-	}
+    if let Ok(mut cache) = state.tag_cache.lock() {
+        cache.insert(index, nodes.clone());
+    }
 
-	Ok(Json(nodes))
+    Ok(Json(nodes))
 }
 
 fn build_tag_tree(path: &std::path::Path) -> Result<Vec<TagNode>> {
-	let object = open_file(path)
-		.with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
-		.into_inner();
-	Ok(serialize_object_tags(&object, 0))
+    let object = open_file(path)
+        .with_context(|| format!("failed to open DICOM for tags: {}", path.display()))?
+        .into_inner();
+    Ok(serialize_object_tags(&object, 0))
 }
 
-fn serialize_object_tags(object: &InMemDicomObject<StandardDataDictionary>, depth: usize) -> Vec<TagNode> {
-	object.iter().map(|element| serialize_element(element, depth)).collect()
+fn serialize_object_tags(
+    object: &InMemDicomObject<StandardDataDictionary>,
+    depth: usize,
+) -> Vec<TagNode> {
+    object
+        .iter()
+        .map(|element| serialize_element(element, depth))
+        .collect()
 }
 
 fn serialize_element(
-	element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
-	depth: usize,
+    element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+    depth: usize,
 ) -> TagNode {
-	let tag = element.header().tag;
-	let tag_repr = format!("({:04X},{:04X})", tag.0, tag.1);
-	let vr_repr = format!("{}", element.header().vr());
-	let keyword = StandardDataDictionary
-		.by_tag(tag)
-		.map(|entry| entry.alias().to_string())
-		.unwrap_or_else(|| "Unknown".to_string());
+    let tag = element.header().tag;
+    let tag_repr = format!("({:04X},{:04X})", tag.0, tag.1);
+    let vr_repr = format!("{}", element.header().vr());
+    let keyword = StandardDataDictionary
+        .by_tag(tag)
+        .map(|entry| entry.alias().to_string())
+        .unwrap_or_else(|| "Unknown".to_string());
 
-	let value = serialize_tag_value(element, tag_repr.as_str(), &vr_repr, depth);
+    let value = serialize_tag_value(element, tag_repr.as_str(), &vr_repr, depth);
 
-	TagNode {
-		tag: tag_repr,
-		vr: vr_repr,
-		keyword,
-		value,
-	}
+    TagNode {
+        tag: tag_repr,
+        vr: vr_repr,
+        keyword,
+        value,
+    }
 }
 
 const TAG_TEXT_PREVIEW_LIMIT: usize = 256;
@@ -388,292 +444,313 @@ const TAG_SEQUENCE_ITEM_LIMIT: usize = 64;
 const TAG_SEQUENCE_DEPTH_LIMIT: usize = 4;
 
 fn serialize_tag_value(
-	element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
-	tag_repr: &str,
-	vr_repr: &str,
-	depth: usize,
+    element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+    tag_repr: &str,
+    vr_repr: &str,
+    depth: usize,
 ) -> TagValue {
-	if tag_repr == "(7FE0,0010)" {
-		return binary_value_from_element(element);
-	}
+    if tag_repr == "(7FE0,0010)" {
+        return binary_value_from_element(element);
+    }
 
-	if vr_repr == "SQ" {
-		return match element.items() {
-			Some(items) => serialize_sequence_items(items, depth),
-			None => TagValue::Error {
-				message: "sequence item decoding failed".to_string(),
-			},
-		};
-	}
+    if vr_repr == "SQ" {
+        return match element.items() {
+            Some(items) => serialize_sequence_items(items, depth),
+            None => TagValue::Error {
+                message: "sequence item decoding failed".to_string(),
+            },
+        };
+    }
 
-	if matches!(vr_repr, "OB" | "OW" | "OD" | "OF" | "UN" | "OL") {
-		return binary_value_from_element(element);
-	}
+    if matches!(vr_repr, "OB" | "OW" | "OD" | "OF" | "UN" | "OL") {
+        return binary_value_from_element(element);
+    }
 
-	let string_value = match element.to_str() {
-		Ok(value) => value.to_string(),
-		Err(error) => {
-			return TagValue::Error {
-				message: format!("value serialization failed: {error}"),
-			};
-		}
-	};
+    let string_value = match element.to_str() {
+        Ok(value) => value.to_string(),
+        Err(error) => {
+            return TagValue::Error {
+                message: format!("value serialization failed: {error}"),
+            };
+        }
+    };
 
-	if is_numeric_vr(vr_repr) {
-		let mut numbers = string_value
-			.split('\\')
-			.filter_map(|part| part.trim().parse::<f64>().ok())
-			.collect::<Vec<_>>();
-		if numbers.is_empty() {
-			TagValue::Error {
-				message: "numeric conversion failed".to_string(),
-			}
-		} else if numbers.len() == 1 {
-			TagValue::Number { value: numbers[0] }
-		} else {
-			let total = numbers.len();
-			let truncated = total > TAG_NUMERIC_VALUE_LIMIT;
-			numbers.truncate(TAG_NUMERIC_VALUE_LIMIT);
-			TagValue::Numbers {
-				value: numbers,
-				truncated,
-				total: truncated.then_some(total),
-			}
-		}
-	} else {
-		TagValue::String {
-			value: format_tag_text_preview(&string_value),
-		}
-	}
+    if is_numeric_vr(vr_repr) {
+        let mut numbers = string_value
+            .split('\\')
+            .filter_map(|part| part.trim().parse::<f64>().ok())
+            .collect::<Vec<_>>();
+        if numbers.is_empty() {
+            TagValue::Error {
+                message: "numeric conversion failed".to_string(),
+            }
+        } else if numbers.len() == 1 {
+            TagValue::Number { value: numbers[0] }
+        } else {
+            let total = numbers.len();
+            let truncated = total > TAG_NUMERIC_VALUE_LIMIT;
+            numbers.truncate(TAG_NUMERIC_VALUE_LIMIT);
+            TagValue::Numbers {
+                value: numbers,
+                truncated,
+                total: truncated.then_some(total),
+            }
+        }
+    } else {
+        TagValue::String {
+            value: format_tag_text_preview(&string_value),
+        }
+    }
 }
 
 fn serialize_sequence_items(
-	items: &[InMemDicomObject<StandardDataDictionary>],
-	depth: usize,
+    items: &[InMemDicomObject<StandardDataDictionary>],
+    depth: usize,
 ) -> TagValue {
-	let total = items.len();
-	let depth_limited = depth >= TAG_SEQUENCE_DEPTH_LIMIT;
-	let item_limited = total > TAG_SEQUENCE_ITEM_LIMIT;
+    let total = items.len();
+    let depth_limited = depth >= TAG_SEQUENCE_DEPTH_LIMIT;
+    let item_limited = total > TAG_SEQUENCE_ITEM_LIMIT;
 
-	if depth_limited {
-		return TagValue::Sequence {
-			items: Vec::new(),
-			truncated: true,
-			total: Some(total),
-		};
-	}
+    if depth_limited {
+        return TagValue::Sequence {
+            items: Vec::new(),
+            truncated: true,
+            total: Some(total),
+        };
+    }
 
-	let serialized_items = items
-		.iter()
-		.take(TAG_SEQUENCE_ITEM_LIMIT)
-		.map(|item| serialize_object_tags(item, depth + 1))
-		.collect();
+    let serialized_items = items
+        .iter()
+        .take(TAG_SEQUENCE_ITEM_LIMIT)
+        .map(|item| serialize_object_tags(item, depth + 1))
+        .collect();
 
-	TagValue::Sequence {
-		items: serialized_items,
-		truncated: item_limited,
-		total: item_limited.then_some(total),
-	}
+    TagValue::Sequence {
+        items: serialized_items,
+        truncated: item_limited,
+        total: item_limited.then_some(total),
+    }
 }
 
 fn format_tag_text_preview(raw: &str) -> String {
-	let normalized = raw.replace('\\', "; ");
-	let mut chars = normalized.chars();
-	let preview: String = chars.by_ref().take(TAG_TEXT_PREVIEW_LIMIT).collect();
-	if chars.next().is_some() {
-		format!("{preview}…")
-	} else {
-		preview
-	}
+    let normalized = raw.replace('\\', "; ");
+    let mut chars = normalized.chars();
+    let preview: String = chars.by_ref().take(TAG_TEXT_PREVIEW_LIMIT).collect();
+    if chars.next().is_some() {
+        format!("{preview}…")
+    } else {
+        preview
+    }
 }
 
-fn binary_value_from_element(element: &dicom_object::mem::InMemElement<StandardDataDictionary>) -> TagValue {
-	if let Some(length) = element.header().length().get() {
-		return TagValue::Binary {
-			length: length as usize,
-		};
-	}
+fn binary_value_from_element(
+    element: &dicom_object::mem::InMemElement<StandardDataDictionary>,
+) -> TagValue {
+    if let Some(length) = element.header().length().get() {
+        return TagValue::Binary {
+            length: length as usize,
+        };
+    }
 
-	if let Some(fragments) = element.fragments() {
-		let length = fragments.iter().map(|fragment| fragment.len()).sum();
-		return TagValue::Binary { length };
-	}
+    if let Some(fragments) = element.fragments() {
+        let length = fragments.iter().map(|fragment| fragment.len()).sum();
+        return TagValue::Binary { length };
+    }
 
-	match element.to_bytes() {
-		Ok(bytes) => TagValue::Binary {
-			length: bytes.len(),
-		},
-		Err(error) => TagValue::Error {
-			message: format!("binary serialization failed: {error}"),
-		},
-	}
+    match element.to_bytes() {
+        Ok(bytes) => TagValue::Binary {
+            length: bytes.len(),
+        },
+        Err(error) => TagValue::Error {
+            message: format!("binary serialization failed: {error}"),
+        },
+    }
 }
 
 fn is_numeric_vr(vr_repr: &str) -> bool {
-	matches!(vr_repr, "US" | "SS" | "UL" | "SL" | "FL" | "FD" | "DS" | "IS")
+    matches!(
+        vr_repr,
+        "US" | "SS" | "UL" | "SL" | "FL" | "FD" | "DS" | "IS"
+    )
 }
 
 async fn index_handler() -> impl IntoResponse {
-	serve_asset("index.html").unwrap_or_else(|| {
-		(StatusCode::NOT_FOUND, Json(ErrorResponse {
-			error: "frontend index asset missing".to_string(),
-		}))
-			.into_response()
-	})
+    serve_asset("index.html").unwrap_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: "frontend index asset missing".to_string(),
+            }),
+        )
+            .into_response()
+    })
 }
 
 async fn asset_handler(Path(path): Path<String>) -> impl IntoResponse {
-	let full_path = format!("assets/{}", path.trim_start_matches('/'));
-	serve_asset(&full_path).unwrap_or_else(|| {
-		(StatusCode::NOT_FOUND, Json(ErrorResponse {
-			error: format!("asset not found: {path}"),
-		}))
-			.into_response()
-	})
+    let full_path = format!("assets/{}", path.trim_start_matches('/'));
+    serve_asset(&full_path).unwrap_or_else(|| {
+        (
+            StatusCode::NOT_FOUND,
+            Json(ErrorResponse {
+                error: format!("asset not found: {path}"),
+            }),
+        )
+            .into_response()
+    })
 }
 
 fn serve_asset(path: &str) -> Option<Response> {
-	let normalized = path.trim_start_matches('/');
-	let asset = FrontendAssets::get(normalized)?;
-	let mime = match normalized.rsplit('.').next().unwrap_or_default() {
-		"js" => "text/javascript",
-		"css" => "text/css",
-		"html" => "text/html",
-		"svg" => "image/svg+xml",
-		"png" => "image/png",
-		"jpg" | "jpeg" => "image/jpeg",
-		"woff2" => "font/woff2",
-		_ => "application/octet-stream",
-	};
+    let normalized = path.trim_start_matches('/');
+    let asset = FrontendAssets::get(normalized)?;
+    let mime = match normalized.rsplit('.').next().unwrap_or_default() {
+        "js" => "text/javascript",
+        "css" => "text/css",
+        "html" => "text/html",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "woff2" => "font/woff2",
+        _ => "application/octet-stream",
+    };
 
-	let mut response = Response::new(axum::body::Body::from(asset.data));
-	response.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
-	Some(response)
-
+    let mut response = Response::new(axum::body::Body::from(asset.data));
+    response
+        .headers_mut()
+        .insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    Some(response)
 }
 
 fn insert_header_if_valid(headers: &mut HeaderMap, name: &'static str, value: String) {
-	if let Ok(parsed) = HeaderValue::from_str(&value) {
-		headers.insert(name, parsed);
-	}
+    if let Ok(parsed) = HeaderValue::from_str(&value) {
+        headers.insert(name, parsed);
+    }
 }
 
 fn touch_request(state: &AppState) {
-	state.last_request.store(now_unix_ms(), Ordering::Relaxed);
+    state.last_request.store(now_unix_ms(), Ordering::Relaxed);
 }
 
 fn spawn_idle_timeout_watcher(
-	timeout_seconds: u64,
-	last_request: Arc<AtomicU64>,
-	tunnel_handle: Option<Arc<TunnelHandle>>,
+    timeout_seconds: u64,
+    last_request: Arc<AtomicU64>,
+    tunnel_handle: Option<Arc<TunnelHandle>>,
 ) {
-	tokio::spawn(async move {
-		loop {
-			tokio::time::sleep(Duration::from_secs(1)).await;
-			let now = now_unix_ms();
-			let last = last_request.load(Ordering::Relaxed);
-			if last > 0 && now.saturating_sub(last) >= timeout_seconds * 1_000 {
-				if let Some(handle) = &tunnel_handle {
-					handle.shutdown();
-				}
-				println!("dcmview: shutting down...");
-				std::process::exit(0);
-			}
-		}
-	});
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(Duration::from_secs(1)).await;
+            let now = now_unix_ms();
+            let last = last_request.load(Ordering::Relaxed);
+            if last > 0 && now.saturating_sub(last) >= timeout_seconds * 1_000 {
+                if let Some(handle) = &tunnel_handle {
+                    handle.shutdown();
+                }
+                println!("dcmview: shutting down...");
+                std::process::exit(0);
+            }
+        }
+    });
 }
 
 async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
-	let ctrl_c = async {
-		tokio::signal::ctrl_c().await.expect("ctrl+c handler");
-	};
+    let ctrl_c = async {
+        tokio::signal::ctrl_c().await.expect("ctrl+c handler");
+    };
 
-	#[cfg(unix)]
-	let terminate = async {
-		tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-			.expect("sigterm handler")
-			.recv()
-			.await;
-	};
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("sigterm handler")
+            .recv()
+            .await;
+    };
 
-	#[cfg(not(unix))]
-	let terminate = std::future::pending::<()>();
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
 
-	tokio::select! {
-		_ = ctrl_c => {},
-		_ = terminate => {},
-	}
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
 
-	if let Some(handle) = tunnel_handle {
-		handle.shutdown();
-	}
-	println!("dcmview: shutting down...");
+    if let Some(handle) = tunnel_handle {
+        handle.shutdown();
+    }
+    println!("dcmview: shutting down...");
 }
 
 #[derive(Debug)]
 struct ApiError {
-	status: StatusCode,
-	message: String,
+    status: StatusCode,
+    message: String,
 }
 
 impl ApiError {
-	fn bad_request(message: impl Into<String>) -> Self {
-		Self {
-			status: StatusCode::BAD_REQUEST,
-			message: message.into(),
-		}
-	}
+    fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: message.into(),
+        }
+    }
 
-	fn not_found(message: impl Into<String>) -> Self {
-		Self {
-			status: StatusCode::NOT_FOUND,
-			message: message.into(),
-		}
-	}
+    fn not_found(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            message: message.into(),
+        }
+    }
 
-	fn unprocessable(message: impl Into<String>) -> Self {
-		Self {
-			status: StatusCode::UNPROCESSABLE_ENTITY,
-			message: message.into(),
-		}
-	}
+    fn unprocessable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
+            message: message.into(),
+        }
+    }
 
-	fn internal(message: impl Into<String>) -> Self {
-		Self {
-			status: StatusCode::INTERNAL_SERVER_ERROR,
-			message: message.into(),
-		}
-	}
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: message.into(),
+        }
+    }
 }
 
 fn pixel_error_to_api_error(error: pixels::PixelError) -> ApiError {
-	match error {
-		pixels::PixelError::FileIndexOutOfRange
-		| pixels::PixelError::NoPixelData
-		| pixels::PixelError::FrameOutOfRange => ApiError::not_found(error.to_string()),
-		pixels::PixelError::UnsupportedTransferSyntax(_) => ApiError::unprocessable(error.to_string()),
-		pixels::PixelError::Decode { .. } => ApiError::internal(error.to_string()),
-	}
+    match error {
+        pixels::PixelError::FileIndexOutOfRange
+        | pixels::PixelError::NoPixelData
+        | pixels::PixelError::FrameOutOfRange => ApiError::not_found(error.to_string()),
+        pixels::PixelError::UnsupportedTransferSyntax(_) => {
+            ApiError::unprocessable(error.to_string())
+        }
+        pixels::PixelError::Decode { .. } => ApiError::internal(error.to_string()),
+    }
 }
 
 impl IntoResponse for ApiError {
-	fn into_response(self) -> Response {
-		(self.status, Json(ErrorResponse { error: self.message })).into_response()
-	}
+    fn into_response(self) -> Response {
+        (
+            self.status,
+            Json(ErrorResponse {
+                error: self.message,
+            }),
+        )
+            .into_response()
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
-	use super::is_non_loopback_bind;
-	use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
+    use super::is_non_loopback_bind;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
-	#[test]
-	fn detects_loopback_and_non_loopback_bind_addresses() {
-		assert!(!is_non_loopback_bind(IpAddr::V4(Ipv4Addr::LOCALHOST)));
-		assert!(!is_non_loopback_bind(IpAddr::V6(Ipv6Addr::LOCALHOST)));
-		assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
-		assert!(is_non_loopback_bind(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
-		assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 24))));
-	}
+    #[test]
+    fn detects_loopback_and_non_loopback_bind_addresses() {
+        assert!(!is_non_loopback_bind(IpAddr::V4(Ipv4Addr::LOCALHOST)));
+        assert!(!is_non_loopback_bind(IpAddr::V6(Ipv6Addr::LOCALHOST)));
+        assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::UNSPECIFIED)));
+        assert!(is_non_loopback_bind(IpAddr::V6(Ipv6Addr::UNSPECIFIED)));
+        assert!(is_non_loopback_bind(IpAddr::V4(Ipv4Addr::new(
+            192, 168, 1, 24
+        ))));
+    }
 }

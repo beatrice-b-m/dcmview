@@ -27,6 +27,7 @@ For PyPI, prefer GitHub trusted publishing on the `pypi` environment. The workfl
    `cargo run --example generate_test_fixtures`
 2. Run the local checks:
    `python3 scripts/check_versions.py`
+   `cargo fmt --all -- --check`
    `cargo test`
    `python3 -m unittest python.tests.test_wrapper`
 3. Tag the exact version declared in `Cargo.toml` and `pyproject.toml`:

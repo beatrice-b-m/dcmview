@@ -72,7 +72,10 @@ async fn decodes_remote_jpeg2000_fixture_through_display_endpoint() {
         .await;
     first.assert_status_ok();
     assert_eq!(
-        first.header(header::CONTENT_TYPE).to_str().expect("content-type"),
+        first
+            .header(header::CONTENT_TYPE)
+            .to_str()
+            .expect("content-type"),
         "image/png"
     );
     assert_eq!(first.header("x-cache").to_str().expect("x-cache"), "MISS");

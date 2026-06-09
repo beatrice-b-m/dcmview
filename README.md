@@ -350,6 +350,8 @@ npm --prefix frontend run build
 Backend:
 
 ```bash
+cargo fmt --all
+cargo fmt --all -- --check
 cargo check
 cargo build
 cargo build --release

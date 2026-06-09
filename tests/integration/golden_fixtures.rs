@@ -8,159 +8,164 @@ use image::ImageFormat;
 use std::path::PathBuf;
 
 fn fixture_path(name: &str) -> PathBuf {
-	PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures").join(name)
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/fixtures")
+        .join(name)
 }
 
 fn decode_u16_le(bytes: &[u8]) -> Vec<u16> {
-	bytes
-		.chunks_exact(2)
-		.map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
-		.collect()
+    bytes
+        .chunks_exact(2)
+        .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+        .collect()
 }
 
 fn apply_window(samples: &[u16], center: f64, width: f64) -> Vec<u8> {
-	let low = center - width / 2.0;
-	let high = center + width / 2.0;
-	samples
-		.iter()
-		.map(|value| {
-			(((((*value as f64).clamp(low, high)) - low) / (high - low)) * 255.0).round() as u8
-		})
-		.collect()
+    let low = center - width / 2.0;
+    let high = center + width / 2.0;
+    samples
+        .iter()
+        .map(|value| {
+            (((((*value as f64).clamp(low, high)) - low) / (high - low)) * 255.0).round() as u8
+        })
+        .collect()
 }
 
 fn assert_pixels_close(actual: &[u8], expected: &[u8], tolerance: u8) {
-	assert_eq!(actual.len(), expected.len(), "pixel buffers must have the same length");
-	for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
-		let delta = actual.abs_diff(*expected);
-		assert!(
-			delta <= tolerance,
-			"pixel mismatch at index {index}: actual={actual} expected={expected} delta={delta}"
-		);
-	}
+    assert_eq!(
+        actual.len(),
+        expected.len(),
+        "pixel buffers must have the same length"
+    );
+    for (index, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+        let delta = actual.abs_diff(*expected);
+        assert!(
+            delta <= tolerance,
+            "pixel mismatch at index {index}: actual={actual} expected={expected} delta={delta}"
+        );
+    }
 }
 
 #[tokio::test]
 async fn golden_uncompressed_fixture_matches_raw_and_display_contracts() {
-	let path = fixture_path("golden-uncompressed-u16-multiframe.dcm");
-	let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-		.await
-		.expect("discover uncompressed golden fixture");
-	assert_eq!(report.files.len(), 1);
+    let path = fixture_path("golden-uncompressed-u16-multiframe.dcm");
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover uncompressed golden fixture");
+    assert_eq!(report.files.len(), 1);
 
-	let file = &report.files[0];
-	assert!(file.has_pixels);
-	assert_eq!(file.frame_count, 3);
-	assert_eq!(file.rows, 4);
-	assert_eq!(file.columns, 4);
-	assert_eq!(
-		file.default_window.expect("default window").center,
-		750.0
-	);
+    let file = &report.files[0];
+    assert!(file.has_pixels);
+    assert_eq!(file.frame_count, 3);
+    assert_eq!(file.rows, 4);
+    assert_eq!(file.columns, 4);
+    assert_eq!(file.default_window.expect("default window").center, 750.0);
 
-	let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
 
-	let raw = test_server.get("/api/file/0/frame/1/raw").await;
-	raw.assert_status_ok();
-	assert_eq!(
-		raw.header("x-cache").to_str().expect("x-cache"),
-		"MISS"
-	);
-	let expected_frame1 = vec![
-		50, 150, 250, 350, 450, 550, 650, 750, 850, 950, 1050, 1150, 1250, 1350, 1450, 1550,
-	];
-	assert_eq!(decode_u16_le(raw.as_bytes().as_ref()), expected_frame1);
+    let raw = test_server.get("/api/file/0/frame/1/raw").await;
+    raw.assert_status_ok();
+    assert_eq!(raw.header("x-cache").to_str().expect("x-cache"), "MISS");
+    let expected_frame1 = vec![
+        50, 150, 250, 350, 450, 550, 650, 750, 850, 950, 1050, 1150, 1250, 1350, 1450, 1550,
+    ];
+    assert_eq!(decode_u16_le(raw.as_bytes().as_ref()), expected_frame1);
 
-	let display = test_server.get("/api/file/0/frame/0").await;
-	display.assert_status_ok();
-	let image = image::load_from_memory_with_format(display.as_bytes().as_ref(), ImageFormat::Png)
-		.expect("valid png")
-		.to_luma8();
-	let expected_frame0 = vec![
-		0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500,
-	];
-	assert_eq!(
-		image.into_raw(),
-		apply_window(&expected_frame0, 750.0, 1500.0)
-	);
+    let display = test_server.get("/api/file/0/frame/0").await;
+    display.assert_status_ok();
+    let image = image::load_from_memory_with_format(display.as_bytes().as_ref(), ImageFormat::Png)
+        .expect("valid png")
+        .to_luma8();
+    let expected_frame0 = vec![
+        0, 100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200, 1300, 1400, 1500,
+    ];
+    assert_eq!(
+        image.into_raw(),
+        apply_window(&expected_frame0, 750.0, 1500.0)
+    );
 }
 
 #[tokio::test]
 async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
-	let path = fixture_path("golden-jpeg-baseline-single-frame.dcm");
-	let obj = open_file(&path).expect("open JPEG fixture");
-	let pixel_data = obj.element_by_name("PixelData").expect("pixel data");
-	let fragment = pixel_data.fragments().expect("jpeg fragments")[0].clone();
-	let expected = image::load_from_memory(&fragment)
-		.expect("decode source jpeg")
-		.to_luma8()
-		.into_raw();
+    let path = fixture_path("golden-jpeg-baseline-single-frame.dcm");
+    let obj = open_file(&path).expect("open JPEG fixture");
+    let pixel_data = obj.element_by_name("PixelData").expect("pixel data");
+    let fragment = pixel_data.fragments().expect("jpeg fragments")[0].clone();
+    let expected = image::load_from_memory(&fragment)
+        .expect("decode source jpeg")
+        .to_luma8()
+        .into_raw();
 
-	let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-		.await
-		.expect("discover JPEG fixture");
-	let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover JPEG fixture");
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
 
-	let response = test_server.get("/api/file/0/frame/0").await;
-	response.assert_status_ok();
-	let decoded = image::load_from_memory_with_format(response.as_bytes().as_ref(), ImageFormat::Png)
-		.expect("decoded PNG")
-		.to_luma8();
-	assert_eq!(decoded.width(), 16);
-	assert_eq!(decoded.height(), 16);
-	assert_pixels_close(&decoded.into_raw(), &expected, 1);
-	assert_ne!(response.as_bytes().as_ref(), fragment.as_slice());
+    let response = test_server.get("/api/file/0/frame/0").await;
+    response.assert_status_ok();
+    let decoded =
+        image::load_from_memory_with_format(response.as_bytes().as_ref(), ImageFormat::Png)
+            .expect("decoded PNG")
+            .to_luma8();
+    assert_eq!(decoded.width(), 16);
+    assert_eq!(decoded.height(), 16);
+    assert_pixels_close(&decoded.into_raw(), &expected, 1);
+    assert_ne!(response.as_bytes().as_ref(), fragment.as_slice());
 }
 
 #[tokio::test]
 async fn golden_multiframe_jpeg_fixture_has_offset_table_and_decodes_by_frame() {
-	let path = fixture_path("golden-jpeg-baseline-multiframe-bot.dcm");
-	let obj = open_file(&path).expect("open multiframe jpeg fixture");
-	let pixel_data = obj.element_by_name("PixelData").expect("pixel data");
-	let offset_table = pixel_data.offset_table().expect("offset table");
-	assert_eq!(offset_table.len(), 3);
-	assert_eq!(offset_table[0], 0);
-	assert!(offset_table[1] > 0);
-	assert!(offset_table[2] > offset_table[1]);
+    let path = fixture_path("golden-jpeg-baseline-multiframe-bot.dcm");
+    let obj = open_file(&path).expect("open multiframe jpeg fixture");
+    let pixel_data = obj.element_by_name("PixelData").expect("pixel data");
+    let offset_table = pixel_data.offset_table().expect("offset table");
+    assert_eq!(offset_table.len(), 3);
+    assert_eq!(offset_table[0], 0);
+    assert!(offset_table[1] > 0);
+    assert!(offset_table[2] > offset_table[1]);
 
-	let fragments = pixel_data.fragments().expect("fragments");
-	assert_eq!(fragments.len(), 3);
-	let expected = image::load_from_memory(&fragments[2])
-		.expect("decode frame 2 jpeg")
-		.to_luma8()
-		.into_raw();
+    let fragments = pixel_data.fragments().expect("fragments");
+    assert_eq!(fragments.len(), 3);
+    let expected = image::load_from_memory(&fragments[2])
+        .expect("decode frame 2 jpeg")
+        .to_luma8()
+        .into_raw();
 
-	let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-		.await
-		.expect("discover multiframe jpeg fixture");
-	let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover multiframe jpeg fixture");
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
 
-	let frame0 = test_server.get("/api/file/0/frame/0").await;
-	let frame2 = test_server.get("/api/file/0/frame/2").await;
-	frame0.assert_status_ok();
-	frame2.assert_status_ok();
+    let frame0 = test_server.get("/api/file/0/frame/0").await;
+    let frame2 = test_server.get("/api/file/0/frame/2").await;
+    frame0.assert_status_ok();
+    frame2.assert_status_ok();
 
-	let decoded_frame2 = image::load_from_memory_with_format(frame2.as_bytes().as_ref(), ImageFormat::Png)
-		.expect("decoded PNG")
-		.to_luma8()
-		.into_raw();
-	assert_pixels_close(&decoded_frame2, &expected, 1);
-	assert_ne!(frame0.as_bytes(), frame2.as_bytes());
+    let decoded_frame2 =
+        image::load_from_memory_with_format(frame2.as_bytes().as_ref(), ImageFormat::Png)
+            .expect("decoded PNG")
+            .to_luma8()
+            .into_raw();
+    assert_pixels_close(&decoded_frame2, &expected, 1);
+    assert_ne!(frame0.as_bytes(), frame2.as_bytes());
 }
 
 #[tokio::test]
 async fn golden_sr_fixture_reports_no_pixels_and_rejects_frame_access() {
-	let path = fixture_path("golden-no-pixels-sr.dcm");
-	let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-		.await
-		.expect("discover sr fixture");
-	assert_eq!(report.files.len(), 1);
-	assert!(!report.files[0].has_pixels);
+    let path = fixture_path("golden-no-pixels-sr.dcm");
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover sr fixture");
+    assert_eq!(report.files.len(), 1);
+    assert!(!report.files[0].has_pixels);
 
-	let test_server = TestServer::new(server::router(support::app_state(report.files)));
-	let files = test_server.get("/api/files").await.json::<serde_json::Value>();
-	assert_eq!(files["files"][0]["has_pixels"], false);
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let files = test_server
+        .get("/api/files")
+        .await
+        .json::<serde_json::Value>();
+    assert_eq!(files["files"][0]["has_pixels"], false);
 
-	let frame = test_server.get("/api/file/0/frame/0").await;
-	assert_eq!(frame.status_code(), StatusCode::NOT_FOUND);
+    let frame = test_server.get("/api/file/0/frame/0").await;
+    assert_eq!(frame.status_code(), StatusCode::NOT_FOUND);
 }
