@@ -21,7 +21,7 @@ jobs:
             wheel_plat_name: manylinux_2_28_x86_64
             binary_name: dcmview
             build_linux_wheel_in_container: true
-          - runner: macos-13
+          - runner: macos-15-intel
             archive_suffix: x86_64-apple-darwin
             wheel_plat_name: macosx_10_13_x86_64
             binary_name: dcmview
