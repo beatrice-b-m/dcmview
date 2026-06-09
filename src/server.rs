@@ -94,7 +94,6 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
         .context("failed to read local bind address")?;
     let server_url = format!("http://{}:{}", local_addr.ip(), local_addr.port());
 
-    println!("dcmview: server running at {server_url}");
     if config.startup_json {
         println!(
             "{}",
@@ -102,6 +101,7 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
                 .context("failed to serialize startup event")?
         );
     }
+    println!("dcmview: server running at {server_url}");
     if is_non_loopback_bind(local_addr.ip()) {
         eprintln!(
 			"dcmview: warning — server bound to non-loopback address {}; endpoints are unauthenticated and may expose sensitive DICOM data",

@@ -214,8 +214,11 @@ async function startSession(
     cwd: commonWorkingDirectory(filePaths),
     env: process.env,
   });
-  const startup = waitForStartup(child, settings.startupTimeoutSeconds * 1000, output);
-  const serverUrl = await startup;
+  const serverUrl = await waitForStartupOrTerminate(
+    child,
+    settings.startupTimeoutSeconds * 1000,
+    output,
+  );
   let panel: vscode.WebviewPanel;
   let title: string;
   try {
@@ -273,10 +276,23 @@ function commonWorkingDirectory(filePaths: readonly string[]): string {
   }
 }
 
-function waitForStartup(
-  child: childProcess.ChildProcessWithoutNullStreams,
+export async function waitForStartupOrTerminate(
+  child: Pick<childProcess.ChildProcessWithoutNullStreams, 'stdout' | 'stderr' | 'once' | 'kill'>,
   timeoutMs: number,
-  output: vscode.OutputChannel,
+  output: Pick<vscode.OutputChannel, 'append' | 'appendLine'>,
+): Promise<string> {
+  try {
+    return await waitForStartup(child, timeoutMs, output);
+  } catch (error) {
+    child.kill('SIGINT');
+    throw error;
+  }
+}
+
+export function waitForStartup(
+  child: Pick<childProcess.ChildProcessWithoutNullStreams, 'stdout' | 'stderr' | 'once'>,
+  timeoutMs: number,
+  output: Pick<vscode.OutputChannel, 'append' | 'appendLine'>,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     let settled = false;

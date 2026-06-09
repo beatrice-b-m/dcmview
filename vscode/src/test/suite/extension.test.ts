@@ -1,6 +1,29 @@
 import * as assert from 'assert';
+import { EventEmitter } from 'events';
 import * as vscode from 'vscode';
-import { binaryCandidates, collectFileSystemPaths, parseStartupLine } from '../../extension';
+import {
+  binaryCandidates,
+  collectFileSystemPaths,
+  parseStartupLine,
+  waitForStartup,
+  waitForStartupOrTerminate,
+} from '../../extension';
+
+class FakeChild extends EventEmitter {
+  readonly stdout = new EventEmitter();
+  readonly stderr = new EventEmitter();
+  readonly killedSignals: string[] = [];
+
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.killedSignals.push(String(signal ?? 'SIGTERM'));
+    return true;
+  }
+}
+
+const output = {
+  append: () => undefined,
+  appendLine: () => undefined,
+};
 
 suite('dcmview extension', () => {
   test('parses structured startup events', () => {
@@ -20,6 +43,31 @@ suite('dcmview extension', () => {
   test('ignores unrelated startup output', () => {
     assert.strictEqual(parseStartupLine('dcmview: loaded 2 DICOM file(s)'), undefined);
     assert.strictEqual(parseStartupLine('{"type":"other","url":"http://127.0.0.1:1"}'), undefined);
+  });
+
+  test('waits for structured startup events before legacy fallback', async () => {
+    const child = new FakeChild();
+    const startup = waitForStartup(child as never, 1000, output);
+
+    child.stdout.emit(
+      'data',
+      Buffer.from(
+        '{"type":"server_started","url":"http://127.0.0.1:51234","host":"127.0.0.1","port":51234}\n' +
+          'dcmview: server running at http://127.0.0.1:9999\n',
+      ),
+    );
+
+    assert.strictEqual(await startup, 'http://127.0.0.1:51234');
+  });
+
+  test('terminates child process when startup wait fails', async () => {
+    const child = new FakeChild();
+
+    await assert.rejects(
+      () => waitForStartupOrTerminate(child as never, 1, output),
+      /Timed out waiting for dcmview startup/,
+    );
+    assert.deepStrictEqual(child.killedSignals, ['SIGINT']);
   });
 
   test('collects only filesystem uris', () => {
