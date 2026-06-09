@@ -1,62 +1,82 @@
 # dcmview
 
-`dcmview` is an ephemeral DICOM inspection tool for developers and data scientists. It scans one or more DICOM files or directories, starts a local browser viewer, exposes a small HTTP API for frames, tags, and annotations, and exits cleanly when stopped.
+`dcmview` is a fast, temporary DICOM viewer for research and development work.
+Point it at one or more DICOM files from the command line or Python, and it
+starts a local browser viewer for images, tags, cine playback, and rectangular
+ROI annotations. Stop the process and the server is gone.
 
-The main use case is fast multi-frame inspection, such as DBT and cine MR, from a single Rust binary with the Svelte frontend embedded at build time.
+The main problem it solves is remote-server inspection. Medical imaging research
+often happens where the data already live: an SSH session, a shared compute
+server, or a locked-down institutional network. Viewing those images usually
+means choosing between slow notebook plots, setting up a web viewer on the
+server, opening firewall ports, or uploading data and annotations into a
+third-party cloud tool. `dcmview` keeps the workflow local to the machine with
+the files: start the viewer, forward the loopback port over SSH when needed, and
+inspect the study in seconds.
+
+`dcmview` is intended for developer and research inspection, not clinical
+diagnosis.
+
+## Why use it?
+
+- Inspect DICOM files where they already are, including remote servers.
+- Avoid notebook-based frame rendering for multi-frame studies.
+- Keep data off third-party viewers when all you need is quick review.
+- Open a browser UI with familiar viewer tools: pan, zoom, scroll,
+  window/level, flips, rotation, tags, and cine playback.
+- Load, edit, and export rectangular ROI annotations without modifying the
+  source DICOM files.
+- Use the same tool from a shell command, a Python script, or a notebook.
+- Run as an ephemeral server with no database, config file, or persistent state.
 
 ## Install
 
-Recommended install paths:
-
-- Ubuntu and other managed Linux systems:
+On supported Linux platforms, the Python package bundles the `dcmview` binary:
 
 ```bash
 python -m pip install --user dcmview-py
 dcmview --help
 ```
 
-This wheel bundles the `dcmview` binary on supported platforms, so users do not need Rust or Node.js installed.
+The package installs both `dcmview` and `dcmview-py`; `dcmview` is the primary
+command.
 
-- macOS:
-  use the published Homebrew tap or download a prebuilt archive from GitHub Releases
+On macOS, use the published Homebrew tap or download a prebuilt archive from
+GitHub Releases.
 
-Source builds remain available for contributors and unsupported platforms.
-
-Build prerequisites:
-
-- Rust stable 1.75+
-- Node.js 18+ and npm at build time
-- `ssh` on `PATH` only when using `--tunnel`
-
-Install from a checkout of this repository:
+Source builds are available for contributors and unsupported platforms:
 
 ```bash
 cargo install --path .
 ```
 
-Build without installing:
+Build prerequisites for source installs:
 
-```bash
-cargo build --release
-./target/release/dcmview --help
-```
-
-`build.rs` runs `npm ci` when `frontend/package-lock.json` changes and then builds the frontend. If `node` or `npm` are not on `PATH`, set `DCMVIEW_NODE_PATH` or `DCMVIEW_NPM_PATH` to absolute executable paths.
+- Rust stable 1.75+
+- Node.js 18+ and npm at build time
+- `ssh` on `PATH` only when using SSH forwarding helpers
 
 ## Quick Start
 
+Open one file:
+
 ```bash
-# Open one file in the browser
 dcmview ./scan.dcm
-
-# Scan a directory recursively
-dcmview ./study_dir
-
-# Run headless on a fixed port and stop after 5 idle minutes
-dcmview --host 127.0.0.1 --port 8888 --no-browser --timeout 300 ./study_dir
 ```
 
-When ready, `dcmview` prints:
+Scan a study directory recursively:
+
+```bash
+dcmview ./study_dir
+```
+
+Run without opening a browser, useful on a remote server:
+
+```bash
+dcmview --no-browser ./study_dir
+```
+
+When ready, `dcmview` prints a URL:
 
 ```text
 dcmview: server running at http://127.0.0.1:<port>
@@ -64,7 +84,136 @@ dcmview: server running at http://127.0.0.1:<port>
 
 Press Ctrl+C to stop the server.
 
-## CLI
+## Remote Server Workflow
+
+The safest default is to keep `dcmview` bound to loopback on the remote machine
+and access it through SSH port forwarding.
+
+On the remote server:
+
+```bash
+dcmview --no-browser --port 8888 /path/to/dicom_or_study_dir
+```
+
+On your local machine:
+
+```bash
+ssh -L 8888:localhost:8888 user@remote-server
+```
+
+Then open:
+
+```text
+http://localhost:8888
+```
+
+You can also let `dcmview` use an auto-assigned port by omitting `--port`; copy
+the printed port into your SSH command. The optional `--tunnel` flags are
+available for environments where the `dcmview` process can start the SSH helper
+itself.
+
+The HTTP server is unauthenticated. It binds to `127.0.0.1` by default. If you
+bind to `0.0.0.0` or another public interface, use your own network access
+controls.
+
+## Python Usage
+
+`dcmview-py` is a small subprocess wrapper around the Rust binary. It is useful
+when a script or notebook has already selected the cases to inspect.
+
+```python
+from dcmview_py import view
+
+# Blocking call; returns when dcmview exits.
+view(["./scan.dcm"], browser=False, timeout=300)
+
+# Non-blocking call.
+handle = view(["./study_dir"], browser=False, block=False)
+print(handle.url)
+handle.stop()
+```
+
+Context manager:
+
+```python
+from dcmview_py import view
+
+with view(["./study_dir"], browser=False, block=False) as handle:
+    print(handle.url)
+```
+
+The module CLI mirrors the Rust options:
+
+```bash
+python -m dcmview_py --no-browser --timeout 120 ./study_dir
+```
+
+## Viewer Features
+
+The embedded browser viewer includes:
+
+- File tabs labeled from `PatientID`, `Modality`, and `StudyDate` when present.
+- Canvas-based image viewing with pan, zoom, scroll, window/level, reset,
+  horizontal/vertical flips, and 90-degree rotation.
+- Window presets including DICOM defaults, full dynamic range, and common CT
+  presets.
+- Multi-frame controls with previous/next, cine playback, FPS selection, loop,
+  and sweep.
+- Lazy DICOM tag browsing with filtering, sequence expansion, binary length
+  display, resizable columns, and click-to-copy values.
+- Rectangular ROI annotation display and editing, including draw, select, move,
+  resize, delete, frame scoping, and CSV export.
+
+Common shortcuts:
+
+| Action | Shortcut |
+|---|---|
+| Previous/next frame | Left/Right arrows or `[` / `]` |
+| Play/pause cine | Space |
+| Window/level tool | `W` |
+| Pan tool | `P` |
+| Zoom tool | `Z` |
+| Scroll tool | `S` |
+| ROI tool | `R` |
+| Reset viewport | Double-click |
+
+Right-drag always zooms, middle-drag always pans, the wheel scrolls frames, and
+Ctrl/Cmd+wheel zooms.
+
+## Annotations
+
+`--annotations` loads an EMBED-style ROI CSV into memory:
+
+```bash
+dcmview --annotations ./embed_annotations.csv ./study_dir
+```
+
+`dcmview` never modifies the input CSV or DICOM files. Viewer edits are kept in
+memory and can be downloaded with **Export ROIs**.
+
+Required columns:
+
+- `anon_dicom_path`
+- `ROI_coords`
+
+Optional columns:
+
+- `num_ROI`; when present, it must equal `len(ROI_coords)`
+- `ROI_frames`; when omitted or `[]`, ROIs apply to all frames
+
+`ROI_coords` is a JSON array of `[ymin, xmin, ymax, xmax]` boxes. `ROI_frames`
+is a JSON array of frame-index lists. JSON-valued fields must be CSV-quoted.
+
+```csv
+anon_dicom_path,num_ROI,ROI_coords,ROI_frames
+/path/to/dbt_case.dcm,2,"[[120,340,220,430],[400,510,480,590]]","[[0,1,2],[5,6]]"
+/path/to/ffdm_case.dcm,1,"[[80,150,190,260]]","[]"
+```
+
+Matching uses normalized path equality against loaded DICOM paths. Frame indices
+are zero-based and must be less than `NumberOfFrames`.
+
+## CLI Reference
 
 ```text
 dcmview [OPTIONS] <PATH> [PATH ...]
@@ -81,131 +230,22 @@ dcmview [OPTIONS] <PATH> [PATH ...]
 | `--tunnel` | false | Start an SSH local port-forward helper |
 | `--tunnel-host <host>` | none | SSH target used with `--tunnel` |
 | `--tunnel-port <u16>` | `0` | Forwarded local port; `0` uses the server port |
-| `--annotations <csv>` | none | Load EMBED-style ROI annotations for overlay and editing |
+| `--annotations <csv>` | none | Load EMBED-style ROI annotations |
 
 Examples:
 
 ```bash
 dcmview ./scan.dcm
 dcmview --no-recursive ./study_dir
-dcmview --host 0.0.0.0 --port 8888 ./study_dir
-dcmview --tunnel --tunnel-host user@host --tunnel-port 9000 ./study_dir
+dcmview --host 127.0.0.1 --port 8888 --no-browser ./study_dir
+dcmview --timeout 300 ./study_dir
 dcmview --annotations ./embed_annotations.csv ./study_dir
 ```
 
-The server is unauthenticated. It binds to loopback by default; if you bind to a public interface, use your own network access controls.
-
-## Viewer
-
-The embedded Svelte viewer includes:
-
-- File tabs labeled from `PatientID · Modality · StudyDate` when available, otherwise by filename
-- Canvas-based frame viewing with pan, zoom, scroll, window/level, reset, flips, and 90-degree rotation
-- Window presets: Default, Full Dynamic, and common CT presets
-- Multi-frame controls with previous/next, cine playback, FPS selection, loop, and sweep
-- Lazy DICOM tag browsing with filter, sequence expansion, binary length display, resizable columns, and click-to-copy
-- Rectangular ROI annotation display and editing, including draw, select, move, resize, delete, frame scoping, and CSV export
-
-Input shortcuts:
-
-| Action | Shortcut |
-|---|---|
-| Frame previous/next | Left/Right arrows or `[` / `]` |
-| Play/pause cine | Space |
-| Window/level tool | `W` |
-| Pan tool | `P` |
-| Zoom tool | `Z` |
-| Scroll tool | `S` |
-| ROI tool | `R` |
-| Reset viewport | Double-click |
-
-Mouse behavior depends on the active tool. Right-drag always zooms, middle-drag always pans, the wheel scrolls frames, and Ctrl/Cmd+wheel zooms.
-
-## Annotations
-
-`--annotations` loads an EMBED-style CSV into memory. dcmview never modifies the input CSV or DICOM files. Viewer edits are kept in memory and can be downloaded with **Export ROIs**.
-
-Required columns:
-
-- `anon_dicom_path`
-- `ROI_coords`
-
-Optional columns:
-
-- `num_ROI`; when present, it must equal `len(ROI_coords)`
-- `ROI_frames`; when omitted or `[]`, ROIs apply to all frames
-
-`ROI_coords` is a JSON array of `[ymin, xmin, ymax, xmax]` boxes. `ROI_frames` is a JSON array of frame-index lists. JSON-valued fields must be CSV-quoted.
-
-```csv
-anon_dicom_path,num_ROI,ROI_coords,ROI_frames
-/path/to/dbt_case.dcm,2,"[[120,340,220,430],[400,510,480,590]]","[[0,1,2],[5,6]]"
-/path/to/ffdm_case.dcm,1,"[[80,150,190,260]]","[]"
-```
-
-Behavior:
-
-- Matching uses normalized path equality against loaded DICOM paths
-- Rows without a matching loaded file are ignored
-- Loaded files without matching rows start with no ROIs
-- Duplicate `anon_dicom_path` rows are rejected
-- Frame indices are zero-based and must be less than `NumberOfFrames`
-- Coordinates are canonicalized to `[ymin, xmin, ymax, xmax]` when edited through the API
-
-## Python Wrapper
-
-The `dcmview-py` package is a subprocess wrapper around the Rust binary.
-
-On supported release platforms, published wheels bundle `dcmview` inside the Python package, so a user-level install is enough:
-
-```bash
-python -m pip install --user dcmview-py
-dcmview --help
-```
-
-The package installs both `dcmview` and `dcmview-py`; `dcmview` is the primary CLI, and `dcmview-py` remains as a compatibility alias.
-
-From a source checkout, the wrapper still works with a locally installed `dcmview` on `PATH`.
-
-```bash
-cargo install --path .
-python -m pip install -e .
-python -m dcmview_py --help
-```
-
-Script usage:
-
-```python
-from dcmview_py import view
-
-# Blocking call; returns when dcmview exits.
-view(["./scan.dcm"], browser=False, timeout=300)
-
-# Non-blocking call.
-handle = view(["./study_dir"], browser=False, annotations="./embed_annotations.csv", block=False)
-print(handle.url)
-handle.stop()
-```
-
-Context manager:
-
-```python
-from dcmview_py import view
-
-with view(["./study_dir"], browser=False, block=False) as handle:
-    print(handle.url)
-```
-
-Module CLI:
-
-```bash
-python -m dcmview_py --no-browser --timeout 120 ./study_dir
-python -m dcmview_py --annotations ./embed_annotations.csv ./study_dir
-```
-
-The module CLI mirrors the Rust options: `--host`, `--port`, `--tunnel`, `--no-recursive`, `--annotations`, and related flags.
-
 ## HTTP API
+
+The browser UI uses a small local HTTP API. It is also useful for scripts that
+need the same decoded frame, tag, or annotation data while the server is running.
 
 Static frontend assets are served at `/` and `/assets/*`.
 
@@ -230,7 +270,7 @@ Static frontend assets are served at `/` and `/assets/*`.
     {
       "index": 0,
       "path": "/path/to/scan.dcm",
-      "label": "PATIENT · MG · 20240101",
+      "label": "PATIENT - MG - 20240101",
       "has_pixels": true,
       "frame_count": 60,
       "rows": 3000,
@@ -245,11 +285,13 @@ Static frontend assets are served at `/` and `/assets/*`.
 }
 ```
 
-`GET /api/file/:index/info` returns `frame_count`, `rows`, `columns`, `transfer_syntax`, `has_pixels`, and `default_window` for one file.
+`GET /api/file/:index/info` returns `frame_count`, `rows`, `columns`,
+`transfer_syntax`, `has_pixels`, and `default_window`.
 
 ### Display Frames
 
-`GET /api/file/:index/frame/:frame` returns `image/png` for supported display paths.
+`GET /api/file/:index/frame/:frame` returns `image/png` for supported display
+paths.
 
 Query parameters:
 
@@ -261,8 +303,10 @@ Query parameters:
 
 Window selection:
 
-- `default`: explicit `wc` and `ww`, then DICOM Window Center/Width, then 1st/99th percentile fallback
-- `full_dynamic`: true min/max of the current frame; ignores DICOM defaults and query window values
+- `default`: explicit `wc` and `ww`, then DICOM Window Center/Width, then
+  1st/99th percentile fallback.
+- `full_dynamic`: true min/max of the current frame; ignores DICOM defaults and
+  query window values.
 
 Transfer syntax behavior:
 
@@ -278,44 +322,28 @@ Response headers include `X-Cache: HIT` or `X-Cache: MISS`.
 
 ### Raw Frames
 
-`GET /api/file/:index/frame/:frame/raw` returns `application/octet-stream` plus metadata headers. This is a decoded sample transport for the frontend, not a copy of the original DICOM Pixel Data element for compressed syntaxes.
+`GET /api/file/:index/frame/:frame/raw` returns `application/octet-stream` plus
+metadata headers. This is a decoded sample transport for the frontend, not a
+copy of the original DICOM Pixel Data element for compressed syntaxes.
 
 Supported raw paths:
 
-- Uncompressed frames: native sample bytes, normalized to little-endian by `dicom-object`
-- JPEG Baseline / Extended: decoded to 8-bit grayscale samples
-- JPEG Lossless: decoded to 8-bit or 16-bit grayscale samples when supported by the codec stack
-- Grayscale JPEG 2000: decoded to 8-bit or 16-bit samples
+- Uncompressed frames: native sample bytes, normalized to little-endian by
+  `dicom-object`.
+- JPEG Baseline / Extended: decoded to 8-bit grayscale samples.
+- JPEG Lossless: decoded to 8-bit or 16-bit grayscale samples when supported by
+  the codec stack.
+- Grayscale JPEG 2000: decoded to 8-bit or 16-bit samples.
 
-JPEG-LS, RLE, unsupported syntaxes, and multi-component JP2 raw decoding return 422 or a decode error.
+JPEG-LS, RLE, unsupported syntaxes, and multi-component JP2 raw decoding return
+422 or a decode error.
 
-Headers:
+### Tags and Annotations
 
-- `X-Cache`
-- `X-Frame-Rows`, `X-Frame-Columns`
-- `X-Frame-Bits-Allocated`, `X-Frame-Pixel-Representation`
-- `X-Frame-Samples-Per-Pixel`, `X-Frame-Photometric-Interpretation`
-- `X-Frame-Rescale-Slope`, `X-Frame-Rescale-Intercept`
-- `X-Frame-Default-Wc`, `X-Frame-Default-Ww` when DICOM window tags are available
-
-### Tags
-
-`GET /api/file/:index/tags` returns an array of tag nodes:
-
-```json
-[
-  {
-    "tag": "(0008,0060)",
-    "vr": "CS",
-    "keyword": "Modality",
-    "value": { "type": "string", "value": "MG" }
-  }
-]
-```
-
-Value types are `string`, `number`, `numbers`, `binary`, `sequence`, and `error`. Pixel data and other binary VRs are represented by byte length, not by full values. Long numeric arrays and sequences may be truncated with `truncated` and `total` fields.
-
-### Annotations
+`GET /api/file/:index/tags` returns an array of DICOM tag nodes. Pixel data and
+other binary VRs are represented by byte length, not by full values. Long
+numeric arrays and sequences may be truncated with `truncated` and `total`
+fields.
 
 `GET /api/file/:index/annotations` returns:
 
@@ -327,15 +355,9 @@ Value types are `string`, `number`, `numbers`, `binary`, `sequence`, and `error`
 }
 ```
 
-Files without annotations return:
-
-```json
-{ "num_roi": 0, "roi_coords": [], "roi_frames": [] }
-```
-
-`PUT /api/file/:index/annotations` replaces one file's in-memory annotations and returns the canonicalized payload. Invalid coordinates or frame mappings return `400 {"error": "..."}`.
-
-`GET /api/annotations/export.csv` downloads the current in-memory annotations as `anon_dicom_path,num_ROI,ROI_coords,ROI_frames`.
+`PUT /api/file/:index/annotations` replaces one file's in-memory annotations and
+returns the canonicalized payload. Invalid coordinates or frame mappings return
+`400 {"error": "..."}`.
 
 ## Development
 
@@ -363,13 +385,16 @@ Tests:
 cargo test
 ```
 
-Integration tests use real DICOM fixtures and cover discovery, display-frame decoding, raw-frame transport, cache headers, tag serialization, annotations, and tunnel fallback.
+Integration tests use real DICOM fixtures and cover discovery, display-frame
+decoding, raw-frame transport, cache headers, tag serialization, annotations,
+and tunnel fallback.
 
 Architecture summary:
 
 - Backend: Rust, Axum, Tokio
 - DICOM: `dicom-rs`, `dicom-pixeldata`, `jpeg2k`
-- Pixel pipeline: server-side display PNGs, raw sample transport for interactive rendering, LRU caches
+- Pixel pipeline: server-side display PNGs, raw sample transport for
+  interactive rendering, LRU caches
 - Frontend: Svelte 5, Vite, TypeScript, embedded via `rust-embed`
 - Distribution: one executable with no runtime frontend assets
 
