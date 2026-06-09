@@ -26,15 +26,18 @@ For PyPI, prefer GitHub trusted publishing on the `pypi` environment. The workfl
 1. Regenerate fixtures if they changed:
    `cargo run --example generate_test_fixtures`
 2. Run the local checks:
+   `python3 scripts/check_versions.py`
    `cargo test`
    `python3 -m unittest python.tests.test_wrapper`
-3. Tag a release:
-   `git tag v0.1.0`
-   `git push origin v0.1.0`
+3. Tag the exact version declared in `Cargo.toml` and `pyproject.toml`:
+   `VERSION="$(python3 scripts/check_versions.py --print-version)"`
+   `git tag "v${VERSION}"`
+   `git push origin "v${VERSION}"`
 
 The release workflow will:
 
 - build `dcmview` on Ubuntu 22.04, macOS Intel, and macOS Apple Silicon
+- fail before release builds if the pushed tag does not match the checked-in package versions
 - build the Linux PyPI wheel inside a `manylinux_2_28_x86_64` container so the published wheel is PyPI-compatible
 - smoke test each built binary against the committed fixture corpus
 - validate the Linux release artifact on Ubuntu 22.04 and Ubuntu 24.04

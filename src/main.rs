@@ -12,8 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 #[derive(Debug, Parser)]
-#[command(name = "dcmview")]
-#[command(about = "Ephemeral DICOM inspection server")]
+#[command(name = "dcmview", version, about = "Ephemeral DICOM inspection server")]
 struct Cli {
 	#[arg(required = true)]
 	paths: Vec<PathBuf>,

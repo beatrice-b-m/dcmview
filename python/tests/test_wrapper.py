@@ -6,6 +6,8 @@ import subprocess
 import sys
 import time
 import unittest
+from contextlib import redirect_stdout
+from io import StringIO
 from pathlib import Path
 from typing import Optional
 from unittest import mock
@@ -40,6 +42,17 @@ class WrapperTests(unittest.TestCase):
 		pyproject = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 		self.assertIn('dcmview = "dcmview_py.__main__:main"', pyproject)
 		self.assertIn('dcmview-py = "dcmview_py.__main__:main"', pyproject)
+
+	def test_cli_reports_wrapper_version(self) -> None:
+		with mock.patch("dcmview_py.__main__._package_version", return_value="9.8.7"):
+			parser = dcmview_main._build_parser()
+		output = StringIO()
+		with redirect_stdout(output):
+			with self.assertRaises(SystemExit) as context:
+				parser.parse_args(["--version"])
+
+		self.assertEqual(context.exception.code, 0)
+		self.assertEqual(output.getvalue().strip(), "dcmview 9.8.7")
 
 	def test_missing_binary_raises_runtime_error(self) -> None:
 		with mock.patch.dict(os.environ, {}, clear=True):

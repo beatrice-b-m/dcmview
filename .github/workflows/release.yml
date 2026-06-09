@@ -11,7 +11,18 @@ permissions:
   id-token: write
 
 jobs:
+  validate-version:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check release tag matches package versions
+        run: python scripts/check_versions.py --tag "${GITHUB_REF_NAME}"
+
   build:
+    needs: validate-version
     strategy:
       fail-fast: false
       matrix:
