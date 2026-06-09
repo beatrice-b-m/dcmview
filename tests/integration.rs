@@ -11,4 +11,5 @@ mod integration {
 	mod tunnel_lifecycle;
 	mod pixels_raw_endpoint;
 	mod annotations_endpoint;
+	mod golden_fixtures;
 }

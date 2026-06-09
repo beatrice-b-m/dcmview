@@ -8,6 +8,10 @@ frontend/dist/
 
 *.dcm
 *.dicom
+!tests/fixtures/golden-jpeg-baseline-multiframe-bot.dcm
+!tests/fixtures/golden-jpeg-baseline-single-frame.dcm
+!tests/fixtures/golden-no-pixels-sr.dcm
+!tests/fixtures/golden-uncompressed-u16-multiframe.dcm
 
 # python package files
 *.egg-info/
