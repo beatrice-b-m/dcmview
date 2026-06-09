@@ -60,6 +60,10 @@ class bdist_wheel(_bdist_wheel):
 			self.plat_name_supplied = True
 			self.plat_name = plat_name
 
+	def get_tag(self) -> tuple[str, str, str]:
+		_, _, plat = super().get_tag()
+		return ("py3", "none", plat)
+
 
 setup(
 	distclass=BinaryDistribution,

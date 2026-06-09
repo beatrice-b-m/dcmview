@@ -1,0 +1,94 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+jobs:
+  changes:
+    runs-on: ubuntu-22.04
+    outputs:
+      packaging: ${{ steps.filter.outputs.packaging }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            packaging:
+              - ".github/workflows/**"
+              - "pyproject.toml"
+              - "setup.py"
+              - "python/**"
+              - "scripts/**"
+
+  tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Regenerate committed fixtures
+        run: cargo run --example generate_test_fixtures
+      - name: Check fixture drift
+        run: git diff --exit-code tests/fixtures
+      - name: Run Rust tests
+        run: cargo test --locked
+      - name: Run Python wrapper tests
+        run: python -m unittest python.tests.test_wrapper
+      - name: Build debug binary
+        run: cargo build --locked
+      - name: Smoke test built binary
+        run: >
+          python scripts/smoke_release_binary.py
+          target/debug/dcmview
+          tests/fixtures/golden-uncompressed-u16-multiframe.dcm
+          tests/fixtures/golden-no-pixels-sr.dcm
+
+  packaging-smoke:
+    needs: changes
+    if: needs.changes.outputs.packaging == 'true'
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release binary
+        run: cargo build --release --locked
+      - name: Install wheel build frontend
+        run: python -m pip install build wheel
+      - name: Build bundled wheel
+        env:
+          DCMVIEW_PY_BUNDLE_BINARY: ${{ github.workspace }}/target/release/dcmview
+          DCMVIEW_PY_WHEEL_PLAT_NAME: linux_x86_64
+          DCMVIEW_PY_REQUIRE_BUNDLED_BINARY: "1"
+        run: python -m build --wheel
+      - name: Verify bundled binary in wheel
+        run: |
+          python - <<'PY'
+          import pathlib
+          import zipfile
+
+          wheel_path = next(pathlib.Path("dist").glob("*.whl"))
+          with zipfile.ZipFile(wheel_path) as archive:
+              names = archive.namelist()
+          assert "dcmview_py/bin/dcmview" in names, names
+          PY

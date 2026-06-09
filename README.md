@@ -6,7 +6,22 @@ The main use case is fast multi-frame inspection, such as DBT and cine MR, from 
 
 ## Install
 
-Prerequisites:
+Recommended install paths:
+
+- Ubuntu and other managed Linux systems:
+
+```bash
+python -m pip install --user dcmview-py
+```
+
+This wheel bundles the `dcmview` binary on supported platforms, so users do not need Rust or Node.js installed.
+
+- macOS:
+  use the published Homebrew tap or download a prebuilt archive from GitHub Releases
+
+Source builds remain available for contributors and unsupported platforms.
+
+Build prerequisites:
 
 - Rust stable 1.75+
 - Node.js 18+ and npm at build time
@@ -138,7 +153,15 @@ Behavior:
 
 ## Python Wrapper
 
-The `dcmview-py` package is a thin subprocess wrapper. It does not bundle the Rust binary; `dcmview` must be on `PATH`.
+The `dcmview-py` package is a subprocess wrapper around the Rust binary.
+
+On supported release platforms, published wheels bundle `dcmview` inside the Python package, so a user-level install is enough:
+
+```bash
+python -m pip install --user dcmview-py
+```
+
+From a source checkout, the wrapper still works with a locally installed `dcmview` on `PATH`.
 
 ```bash
 cargo install --path .
