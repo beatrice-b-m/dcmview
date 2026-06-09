@@ -98,8 +98,16 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
 
     let transfer_syntax_uid = obj.meta().transfer_syntax().to_string();
     let patient_id = read_str(&obj, "PatientID").unwrap_or_default();
+    let patient_name = read_str(&obj, "PatientName").unwrap_or_default();
     let modality = read_str(&obj, "Modality").unwrap_or_default();
+    let sop_instance_uid = read_str(&obj, "SOPInstanceUID").unwrap_or_default();
+    let study_instance_uid = read_str(&obj, "StudyInstanceUID").unwrap_or_default();
     let study_date = read_str(&obj, "StudyDate").unwrap_or_default();
+    let study_description = read_str(&obj, "StudyDescription").unwrap_or_default();
+    let series_instance_uid = read_str(&obj, "SeriesInstanceUID").unwrap_or_default();
+    let series_number = read_str(&obj, "SeriesNumber").unwrap_or_default();
+    let series_description = read_str(&obj, "SeriesDescription").unwrap_or_default();
+    let instance_number = read_str(&obj, "InstanceNumber").unwrap_or_default();
     let frame_count = read_u32(&obj, "NumberOfFrames").unwrap_or(1);
     let rows = read_u32(&obj, "Rows").unwrap_or(0);
     let columns = read_u32(&obj, "Columns").unwrap_or(0);
@@ -130,6 +138,17 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         index: 0,
         path: path.to_path_buf(),
         label,
+        patient_id,
+        patient_name,
+        study_instance_uid,
+        study_date,
+        study_description,
+        series_instance_uid,
+        series_number,
+        series_description,
+        modality,
+        instance_number,
+        sop_instance_uid,
         has_pixels,
         frame_count,
         rows,
