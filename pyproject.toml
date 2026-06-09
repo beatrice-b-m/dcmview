@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dcmview-py"
-version = "0.1.0"
+version = "0.1.1"
 description = "Fast temporary DICOM viewer for local and remote research workflows"
 readme = "README.md"
 requires-python = ">=3.9"
-authors = [{ name = "dcmview maintainers" }]
+authors = [{ name = "Beatrice Brown-Mulry" }]
 license = "MIT"
 classifiers = [
 	"Programming Language :: Python :: 3",
