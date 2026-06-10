@@ -86,7 +86,13 @@
 	}
 
 	function plural(count: number, singular: string): string {
-		return `${count} ${singular}${count === 1 ? "" : "s"}`;
+		const pluralForms: Record<string, string> = {
+			image: "images",
+			series: "series",
+			study: "studies",
+		};
+		const label = count === 1 ? singular : (pluralForms[singular] ?? `${singular}s`);
+		return `${count} ${label}`;
 	}
 
 	function tierLabel(kind: NavKind): string {
