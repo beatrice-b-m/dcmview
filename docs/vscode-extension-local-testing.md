@@ -2,7 +2,7 @@
 
 The VS Code extension is a local development wrapper around the existing
 `dcmview` binary. Marketplace VSIX builds are target-specific and bundle release
-binaries for Linux x64, macOS x64, and macOS arm64.
+binaries for Linux x64, macOS x64, macOS arm64, and Windows x64.
 
 ## One-time setup
 
@@ -14,10 +14,11 @@ cargo build
 The extension resolves binaries in this order:
 
 1. `dcmview.binaryPath` VS Code setting.
-2. `target/debug/dcmview` from this repository.
+2. `target/debug/dcmview` from this repository, or `target/debug/dcmview.exe`
+   on Windows.
 3. `vscode/resources/bin/<platform>-<arch>/dcmview` bundled in Marketplace VSIX
    builds, where supported platform directories are `linux-x64`, `darwin-x64`,
-   and `darwin-arm64`.
+   `darwin-arm64`, and `win32-x64`. Windows uses `dcmview.exe`.
 4. `dcmview` on `PATH`.
 
 When `dcmview.terminalInterception.enabled` is true, the extension starts a
@@ -107,7 +108,8 @@ npm --prefix vscode run package:release
 That command expects downloaded release artifacts under `artifacts/`. For local
 packaging experiments, create matching `dcmview-*-<target>.tar.gz` archives for
 `x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, and
-`aarch64-apple-darwin`, or use `dcmview.binaryPath` to test a local binary
+`aarch64-apple-darwin`, plus a `dcmview-*-x86_64-pc-windows-msvc.zip` archive
+containing `dcmview.exe`, or use `dcmview.binaryPath` to test a local binary
 without bundling.
 
 Install or update a target VSIX from VS Code with `Extensions: Install from

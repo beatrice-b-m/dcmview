@@ -2,15 +2,16 @@
 
 Release automation is split across two workflows:
 
-- `.github/workflows/ci.yml` runs Linux-only tests on pushes and pull requests
-- `.github/workflows/release.yml` builds tagged release artifacts for Linux and macOS
+- `.github/workflows/ci.yml` runs Linux and Windows tests on pushes and pull requests
+- `.github/workflows/release.yml` builds tagged release artifacts for Linux,
+  macOS, and Windows x64
 - `azure-pipelines/vscode-marketplace.yml` publishes VS Code Marketplace
   packages from GitHub Release assets
 
 ## Release channels
 
 - **GitHub Releases** are the canonical binary artifacts
-- **PyPI wheels** are the preferred Linux/server install path when `PUBLISH_PYPI=1`
+- **PyPI wheels** are the preferred Python install path when `PUBLISH_PYPI=1`
 - **VSIX files** are target-specific Marketplace packages attached to GitHub
   Releases and published by Azure Pipelines
 - **Homebrew** formula generation is always part of the release job, and tap publication is enabled when `HOMEBREW_TAP_REPOSITORY` is configured
@@ -41,28 +42,31 @@ publishes only VSIX assets that already exist on the GitHub Release.
 1. Regenerate fixtures if they changed:
    `cargo run --example generate_test_fixtures`
 2. Run the local checks:
-   `python3 scripts/check_versions.py`
+   `python scripts/check_versions.py`
    `cargo fmt --all -- --check`
    `cargo test`
-   `python3 -m unittest python.tests.test_wrapper`
+   `python -m unittest discover -s python/tests`
    `npm --prefix vscode run compile`
 3. Tag the exact version declared in `Cargo.toml`, `pyproject.toml`, and
    `vscode/package.json`:
-   `VERSION="$(python3 scripts/check_versions.py --print-version)"`
+   `VERSION="$(python scripts/check_versions.py --print-version)"`
    `git tag "v${VERSION}"`
    `git push origin "v${VERSION}"`
 
 The release workflow will:
 
-- build `dcmview` on Ubuntu 22.04, macOS Intel, and macOS Apple Silicon
+- build `dcmview` on Ubuntu 22.04, macOS Intel, macOS Apple Silicon, and
+  Windows x64
 - fail before release builds if the pushed tag does not match the checked-in package versions
 - build the Linux PyPI wheel inside a `manylinux_2_28_x86_64` container so the published wheel is PyPI-compatible
 - smoke test each built binary against the committed fixture corpus
 - validate the Linux release artifact on Ubuntu 22.04 and Ubuntu 24.04
+- validate the Windows zip artifact on Windows latest
 - build bundled `dcmview-py` wheels
-- package target-specific VSIX artifacts for Linux x64, macOS x64, and macOS
-  arm64
-- publish release tarballs and wheels to GitHub Releases
+- package target-specific VSIX artifacts for Linux x64, macOS x64, macOS
+  arm64, and Windows x64
+- publish release tarballs, the Windows zip, checksums, and wheels to GitHub
+  Releases
 - publish the VSIX artifacts to GitHub Releases
 - render `packaging/homebrew/dcmview.rb`
 - optionally publish to PyPI and the configured tap repo
@@ -84,11 +88,13 @@ npm --prefix vscode run package:release
 - `dist/dcmview-<version>-linux-x64.vsix`
 - `dist/dcmview-<version>-darwin-x64.vsix`
 - `dist/dcmview-<version>-darwin-arm64.vsix`
+- `dist/dcmview-<version>-win32-x64.vsix`
 
 Each package contains exactly one bundled binary at
-`vscode/resources/bin/<target>/dcmview`. Windows and other platforms are not
-published yet. `dcmview.binaryPath` remains the override for unsupported
-platforms, local debug binaries, and troubleshooting bundled-binary issues.
+`vscode/resources/bin/<target>/dcmview`, except Windows x64, which contains
+`vscode/resources/bin/win32-x64/dcmview.exe`. `dcmview.binaryPath` remains the
+override for unsupported platforms, local debug binaries, and troubleshooting
+bundled-binary issues.
 
 The Azure Marketplace pipeline is tag-triggered, but the publish deployment is
 bound to the `vscode-marketplace` environment. Its approval check provides the

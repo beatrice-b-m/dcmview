@@ -25,7 +25,17 @@ jobs:
               - "scripts/**"
 
   tests:
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            smoke_binary: target/debug/dcmview
+            run_vscode_tests: true
+          - runner: windows-latest
+            smoke_binary: target/debug/dcmview.exe
+            run_vscode_tests: false
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,19 +69,20 @@ jobs:
       - name: Run Rust tests
         run: cargo test --locked
       - name: Run Python wrapper tests
-        run: python -m unittest python.tests.test_wrapper
+        run: python -m unittest discover -s python/tests
       - name: Install VS Code extension dependencies
         run: npm --prefix vscode ci
       - name: Compile VS Code extension
         run: npm --prefix vscode run compile
       - name: Run VS Code extension tests
+        if: ${{ matrix.run_vscode_tests }}
         run: xvfb-run -a npm --prefix vscode test
       - name: Build debug binary
         run: cargo build --locked
       - name: Smoke test built binary
         run: >
           python scripts/smoke_release_binary.py
-          target/debug/dcmview
+          ${{ matrix.smoke_binary }}
           tests/fixtures/golden-uncompressed-u16-multiframe.dcm
           tests/fixtures/golden-no-pixels-sr.dcm
 
@@ -94,5 +105,5 @@ jobs:
       - name: Verify wheel name and installed CLI
         run: >
           python scripts/verify_wheel_install.py
-          "$(find dist -maxdepth 1 -name '*manylinux_2_28_x86_64.whl' | head -n 1)"
+          dist
           --expected-platform manylinux_2_28_x86_64

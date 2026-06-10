@@ -39,7 +39,8 @@ stages:
                       --output-dir marketplace-dist \
                       --required "dcmview-${version}-linux-x64.vsix" \
                       --required "dcmview-${version}-darwin-x64.vsix" \
-                      --required "dcmview-${version}-darwin-arm64.vsix"
+                      --required "dcmview-${version}-darwin-arm64.vsix" \
+                      --required "dcmview-${version}-win32-x64.vsix"
                   displayName: Download GitHub Release VSIX artifacts
 
                 - script: npm --prefix vscode ci

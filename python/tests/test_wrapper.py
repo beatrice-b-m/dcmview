@@ -167,6 +167,7 @@ class WrapperTests(unittest.TestCase):
 				)
 
 			verify_wheel.validate_wheel_archive(wheel, "win_amd64")
+			self.assertEqual(verify_wheel.resolve_wheel_path(Path(temp_dir), "win_amd64"), wheel.resolve())
 
 	def test_tunnel_requires_host_before_spawn(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):

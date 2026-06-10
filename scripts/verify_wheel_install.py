@@ -59,13 +59,26 @@ def validate_wheel_archive(wheel_path: pathlib.Path, expected_platform: str) -> 
 		expect("dcmview-py =" in entry_points, "dcmview-py console script missing from wheel metadata")
 
 
+def resolve_wheel_path(path: pathlib.Path, expected_platform: str) -> pathlib.Path:
+	if path.is_file():
+		return path.resolve()
+	if not path.is_dir():
+		raise AssertionError(f"wheel path does not exist: {path}")
+
+	candidates = sorted(path.glob(f"*{expected_platform}*.whl"))
+	if len(candidates) != 1:
+		found = ", ".join(str(candidate) for candidate in candidates) or "none"
+		raise AssertionError(f"expected one {expected_platform} wheel under {path}, found {found}")
+	return candidates[0].resolve()
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser()
-	parser.add_argument("wheel", help="Path to the wheel to validate")
+	parser.add_argument("wheel", help="Path to the wheel to validate, or a directory containing one matching wheel")
 	parser.add_argument("--expected-platform", required=True)
 	args = parser.parse_args()
 
-	wheel_path = pathlib.Path(args.wheel).resolve()
+	wheel_path = resolve_wheel_path(pathlib.Path(args.wheel), args.expected_platform)
 	validate_wheel_archive(wheel_path, args.expected_platform)
 
 	with tempfile.TemporaryDirectory(prefix="dcmview-wheel-verify-") as temp_dir:

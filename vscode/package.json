@@ -105,7 +105,7 @@
     "test": "npm run compile && node ./out/test/runTest.js",
     "prepare:dist": "node -e \"require('fs').mkdirSync('../dist', { recursive: true })\"",
     "package": "npm run prepare:dist && npm run compile && vsce package --no-dependencies --out ../dist/dcmview-${npm_package_version}.vsix",
-    "package:release": "npm run prepare:dist && python3 ../scripts/package_vscode_targets.py --artifacts-dir ../artifacts --out-dir ../dist"
+    "package:release": "npm run prepare:dist && python ../scripts/package_vscode_targets.py --artifacts-dir ../artifacts --out-dir ../dist"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
