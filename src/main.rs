@@ -58,7 +58,6 @@ struct Cli {
         long = "vscode-bridge-client",
         hide = true,
         num_args = 1..,
-        trailing_var_arg = true,
         allow_hyphen_values = true
     )]
     vscode_bridge_client: Option<Vec<String>>,
@@ -360,6 +359,11 @@ mod tests {
                 "launcher-used CLI flag --{expected} must exist on Cli"
             );
         }
+    }
+
+    #[test]
+    fn cli_definition_satisfies_clap_debug_assertions() {
+        Cli::command().debug_assert();
     }
 
     fn launcher_long_flags() -> HashSet<String> {
