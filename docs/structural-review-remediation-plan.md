@@ -50,6 +50,12 @@ main findings still reproduce.
   launchers, not alternate DICOM implementations.
 - Keep both frame transports: server-rendered PNGs for cine/read-only display
   and raw frames for responsive window/level interaction.
+- Keep raw-frame samples source-faithful. Clients continue to apply photometric
+  interpretation from metadata; the backend PNG path must be fixed to match.
+- Treat `types.rs` as the source of truth for API types, generate checked-in
+  TypeScript types from it, and verify generated-file freshness in CI.
+- Package bundled platform binaries in a universal VSIX for broader closed
+  testing, while keeping `dcmview.binaryPath` and `PATH` as overrides/fallbacks.
 - Make contracts explicit and tested where packages meet: pixel semantics,
   HTTP JSON and headers, startup output, CLI flags, and bridge wire messages.
 - Prefer small, independently verifiable changes. Each phase below can land in
@@ -68,8 +74,8 @@ Implementation steps:
    `/api/file/:i/frame/:n` and `/api/file/:i/frame/:n/raw`, renders or inspects
    both paths, and proves the expected inversion semantics.
 3. Make the backend display path handle `MONOCHROME1` explicitly after
-   windowing. This preserves the raw-frame API and keeps the frontend renderer's
-   current photometric behavior.
+   windowing. This preserves the raw-frame API as decoded source samples plus
+   metadata and keeps the frontend renderer's current photometric behavior.
 4. Add targeted tests for default-window and `mode=full_dynamic` behavior so
    inversion does not bypass the established window resolution order.
 
@@ -95,16 +101,18 @@ Implementation steps:
    metadata if the current frontend test setup can support it cheaply. If not,
    keep the function factored and covered through `typecheck` plus Rust
    contract tests.
-4. Evaluate `ts-rs` or `schemars` as the single-source path for Rust-to-TS API
-   types. Do not start with full generation if it creates a broad dependency or
-   build-system change; first document which structs and enums would be
-   generated.
+4. Add checked-in generated TypeScript API types from Rust, using `types.rs` as
+   the source of truth. Prefer a regeneration command plus a CI drift check over
+   making normal frontend builds depend on Rust type generation.
+5. Move `api.ts` to import or re-export the generated contract types instead of
+   maintaining duplicate hand-written interfaces where generation applies.
 
 Acceptance checks:
 
 - `npm --prefix frontend run typecheck`
 - `npm --prefix frontend run build`
 - `cargo test --test integration api_contract`
+- CI drift check for generated TypeScript types
 
 ## Phase 3: Startup Protocol Consolidation
 
@@ -157,29 +165,39 @@ Acceptance checks:
 
 ## Phase 5: VS Code Extension Release Decision
 
-Goal: remove the ambiguous state between dev-only extension and releasable
-extension.
+Goal: package a VSIX suitable for broader closed testing without adding
+Marketplace publishing scope.
 
-Decision options:
+Implementation steps:
 
-1. Product path: add VSIX packaging, populate `resources/bin/<platform>-<arch>`
-   from release artifacts, include `vscode/package.json` in version sync, and
-   document install/update flow.
-2. Private/dev path: document the extension as local-testing only, keep
-   `private: true`, remove or de-emphasize unpopulated bundled-binary lookup,
-   and require `dcmview.binaryPath` or `PATH`.
-
-Recommended next step: choose the private/dev path unless there is an immediate
-need to distribute VSIX artifacts. It matches the current package state and
-keeps release work out of the correctness remediation.
+1. Add VSIX packaging scripts to `vscode/package.json`, using `vsce package`
+   with closed-test-friendly settings.
+2. Add `.vscodeignore` so the VSIX contains the compiled extension runtime,
+   package metadata, closed-testing docs, and bundled binaries, but excludes
+   source, tests, transient build output, and package-manager caches.
+3. Populate `vscode/resources/bin/<platform>-<arch>/dcmview` from the existing
+   release binaries for the supported closed-test platforms:
+   `linux-x64`, `darwin-x64`, and `darwin-arm64`.
+4. Package one universal VSIX for closed testing. This keeps install
+   instructions simple; revisit platform-specific VSIX artifacts only if size
+   or platform targeting becomes a practical problem.
+5. Keep `dcmview.binaryPath` as the first lookup override and `PATH` as the
+   fallback after bundled binaries. Do not make the extension install or depend
+   on `dcmview-py`/pip at runtime.
+6. Include `vscode/package.json` in version synchronization so the VSIX version
+   tracks the Rust binary and Python package during releases.
+7. Document closed-test installation, update, and troubleshooting flow,
+   including the bundled-binary platforms and the `dcmview.binaryPath` escape
+   hatch.
 
 Acceptance checks:
 
 - `python scripts/check_versions.py`
 - `npm --prefix vscode run compile`
 - `npm --prefix vscode test`
-- Updated docs in `docs/vscode-extension-local-testing.md` or
-  `docs/releasing.md`, depending on the chosen path.
+- VSIX package contains compiled runtime files and the expected
+  `resources/bin/**` binaries
+- Updated docs in `docs/vscode-extension-local-testing.md` and `docs/releasing.md`
 
 ## Phase 6: Low-Risk Developer Workflow Hardening
 
@@ -219,14 +237,14 @@ Acceptance checks:
 6. Phase 6, because these are useful guardrails but lower-risk than rendering
    and protocol drift.
 
-## Open Questions
+## Resolved Decisions
 
-1. Should raw-frame samples remain faithful to source photometric interpretation,
-   with clients applying inversion, or should the backend normalize raw samples
-   and expose a different metadata contract? This plan recommends keeping raw
-   samples source-faithful and fixing backend PNG inversion only.
-2. Is the VS Code extension intended for private testing only for the next
-   release? If yes, avoid VSIX packaging and focus on local testability.
-3. Should Rust-to-TypeScript type generation become part of normal builds, or
-   should it be a checked-in generated artifact verified in CI? The latter may
-   keep contributor setup simpler.
+1. Raw-frame samples remain faithful to source photometric interpretation.
+   Clients apply inversion from metadata, and the backend PNG path is fixed to
+   apply matching `MONOCHROME1` inversion after windowing.
+2. The next release includes VSIX packaging for broader closed testing. The
+   VSIX bundles supported platform binaries and does not depend on pip at
+   runtime, though release automation can reuse the same binary artifacts that
+   feed the Python wheels.
+3. Rust-to-TypeScript API type generation uses checked-in generated artifacts
+   verified by CI, not build-time generation in every normal frontend build.
