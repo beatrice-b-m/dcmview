@@ -17,6 +17,7 @@
     "workspace"
   ],
   "activationEvents": [
+    "onStartupFinished",
     "onCommand:dcmview.openPath",
     "onCommand:dcmview.openWorkspaceSelection",
     "onCommand:dcmview.stopAll"
@@ -73,6 +74,11 @@
           "default": 20,
           "minimum": 1,
           "description": "Seconds to wait for dcmview to report its local server URL."
+        },
+        "dcmview.terminalInterception.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Route dcmview and dcmview-py commands launched from new integrated terminals into VS Code webview panels."
         }
       }
     }

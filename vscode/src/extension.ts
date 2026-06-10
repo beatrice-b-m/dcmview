@@ -1,10 +1,16 @@
 import * as childProcess from 'child_process';
+import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
 const STARTUP_PREFIX = 'dcmview: server running at ';
 const STARTUP_EVENT_TYPE = 'server_started';
+const BRIDGE_BYPASS_ENV = 'DCMVIEW_VSCODE_BYPASS';
+const BRIDGE_BINARY_ENV = 'DCMVIEW_VSCODE_BINARY';
+const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
+const BRIDGE_URL_ENV = 'DCMVIEW_VSCODE_BRIDGE_URL';
 
 interface StartupEvent {
   type: string;
@@ -18,18 +24,43 @@ interface ExtensionSettings {
   defaultRecursive: boolean;
   extraArgs: string[];
   startupTimeoutSeconds: number;
+  terminalInterceptionEnabled: boolean;
 }
 
 interface RunningSession {
+  readonly id: string;
   readonly panel: vscode.WebviewPanel;
   readonly process: childProcess.ChildProcessWithoutNullStreams;
   readonly output: vscode.OutputChannel;
   readonly name: string;
+  readonly url: string;
+  readonly exitCode: Promise<number>;
   stopped: boolean;
 }
 
+interface BridgeServer {
+  readonly server: http.Server;
+  readonly url: string;
+  readonly token: string;
+}
+
+interface BridgeLaunchRequest {
+  program?: string;
+  args?: string[];
+  cwd?: string;
+  wait?: boolean;
+}
+
+interface BridgeLaunchResponse {
+  sessionId: string;
+  url: string;
+  exitCode?: number;
+}
+
 const sessions = new Set<RunningSession>();
+const sessionsById = new Map<string, RunningSession>();
 let outputChannel: vscode.OutputChannel | undefined;
+let bridgeServer: BridgeServer | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel('dcmview');
@@ -47,10 +78,19 @@ export function activate(context: vscode.ExtensionContext): void {
       await stopAllSessions();
       vscode.window.showInformationMessage('Stopped all dcmview sessions.');
     }),
+    vscode.workspace.onDidChangeConfiguration((event) => {
+      if (event.affectsConfiguration('dcmview')) {
+        void configureTerminalInterception(context);
+      }
+    }),
+    { dispose: () => void stopBridge() },
   );
+
+  void configureTerminalInterception(context);
 }
 
 export async function deactivate(): Promise<void> {
+  await stopBridge();
   await stopAllSessions();
 }
 
@@ -113,8 +153,7 @@ async function openUris(context: vscode.ExtensionContext, uris: readonly vscode.
 
   try {
     const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
-    const session = await startSession(context, binary, filePaths, settings, output);
-    sessions.add(session);
+    await startPathSession(context, binary, filePaths, settings, output);
   } catch (error) {
     output.appendLine(formatError(error));
     vscode.window.showErrorMessage(formatError(error));
@@ -132,6 +171,7 @@ function readSettings(): ExtensionSettings {
     defaultRecursive: config.get('defaultRecursive', true),
     extraArgs: config.get('extraArgs', []),
     startupTimeoutSeconds: config.get('startupTimeoutSeconds', 20),
+    terminalInterceptionEnabled: config.get('terminalInterception.enabled', true),
   };
 }
 
@@ -203,16 +243,17 @@ async function findOnPath(executable: string): Promise<boolean> {
 async function startSession(
   context: vscode.ExtensionContext,
   binary: string,
-  filePaths: readonly string[],
+  args: readonly string[],
+  cwd: string,
+  title: string,
   settings: ExtensionSettings,
   output: vscode.OutputChannel,
 ): Promise<RunningSession> {
-  const args = buildDcmviewArgs(filePaths, settings);
   output.appendLine(`Launching: ${binary} ${args.map(shellQuote).join(' ')}`);
 
   const child = childProcess.spawn(binary, args, {
-    cwd: commonWorkingDirectory(filePaths),
-    env: process.env,
+    cwd,
+    env: { ...process.env, [BRIDGE_BYPASS_ENV]: '1' },
   });
   const serverUrl = await waitForStartupOrTerminate(
     child,
@@ -220,11 +261,9 @@ async function startSession(
     output,
   );
   let panel: vscode.WebviewPanel;
-  let title: string;
   try {
     const externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(serverUrl));
 
-    title = `dcmview: ${path.basename(filePaths[0])}${filePaths.length > 1 ? ` +${filePaths.length - 1}` : ''}`;
     panel = vscode.window.createWebviewPanel('dcmview.viewer', title, vscode.ViewColumn.Beside, {
       enableScripts: true,
       localResourceRoots: [context.extensionUri],
@@ -235,26 +274,59 @@ async function startSession(
     throw error;
   }
 
+  let resolveExitCode: (exitCode: number) => void;
+  const exitCode = new Promise<number>((resolve) => {
+    resolveExitCode = resolve;
+  });
   const session: RunningSession = {
+    id: crypto.randomUUID(),
     panel,
     process: child,
     output,
     name: title,
+    url: serverUrl,
+    exitCode,
     stopped: false,
   };
 
   child.once('exit', (code, signal) => {
     output.appendLine(`dcmview exited (${title}): code=${code ?? 'null'} signal=${signal ?? 'null'}`);
     sessions.delete(session);
+    sessionsById.delete(session.id);
+    resolveExitCode(Number(code ?? 0));
     if (!session.stopped) {
       panel.dispose();
     }
   });
   panel.onDidDispose(() => {
-    void stopSession(session);
+    void stopSession(session, false);
   });
 
+  sessions.add(session);
+  sessionsById.set(session.id, session);
   return session;
+}
+
+async function startPathSession(
+  context: vscode.ExtensionContext,
+  binary: string,
+  filePaths: readonly string[],
+  settings: ExtensionSettings,
+  output: vscode.OutputChannel,
+): Promise<RunningSession> {
+  return startSession(
+    context,
+    binary,
+    buildDcmviewArgs(filePaths, settings),
+    commonWorkingDirectory(filePaths),
+    sessionTitle(filePaths),
+    settings,
+    output,
+  );
+}
+
+function sessionTitle(filePaths: readonly string[]): string {
+  return `dcmview: ${path.basename(filePaths[0])}${filePaths.length > 1 ? ` +${filePaths.length - 1}` : ''}`;
 }
 
 function buildDcmviewArgs(filePaths: readonly string[], settings: ExtensionSettings): string[] {
@@ -264,6 +336,41 @@ function buildDcmviewArgs(filePaths: readonly string[], settings: ExtensionSetti
   }
   args.push(...settings.extraArgs, ...filePaths);
   return args;
+}
+
+export function normalizeInterceptedArgs(args: readonly string[]): string[] {
+  const normalized = [...args];
+  if (!hasFlag(normalized, '--no-browser')) {
+    normalized.unshift('--no-browser');
+  }
+  if (!hasFlag(normalized, '--startup-json')) {
+    normalized.unshift('--startup-json');
+  }
+  if (!hasOptionValue(normalized, ['--host'])) {
+    normalized.unshift('127.0.0.1');
+    normalized.unshift('--host');
+  }
+  if (!hasOptionValue(normalized, ['--port', '-p'])) {
+    normalized.unshift('0');
+    normalized.unshift('--port');
+  }
+  return normalized;
+}
+
+function hasFlag(args: readonly string[], flag: string): boolean {
+  return args.includes(flag);
+}
+
+function hasOptionValue(args: readonly string[], options: readonly string[]): boolean {
+  for (const option of options) {
+    if (args.includes(option)) {
+      return true;
+    }
+    if (args.some((arg) => arg.startsWith(`${option}=`))) {
+      return true;
+    }
+  }
+  return false;
 }
 
 function commonWorkingDirectory(filePaths: readonly string[]): string {
@@ -406,13 +513,17 @@ async function stopAllSessions(): Promise<void> {
   await Promise.all(Array.from(sessions).map((session) => stopSession(session)));
 }
 
-async function stopSession(session: RunningSession): Promise<void> {
+async function stopSession(session: RunningSession, disposePanel = true): Promise<void> {
   if (session.stopped) {
     return;
   }
   session.stopped = true;
   sessions.delete(session);
+  sessionsById.delete(session.id);
   await terminateProcess(session.process, session.output, session.name);
+  if (disposePanel) {
+    session.panel.dispose();
+  }
 }
 
 async function terminateProcess(
@@ -446,6 +557,223 @@ function getOutputChannel(): vscode.OutputChannel {
     outputChannel = vscode.window.createOutputChannel('dcmview');
   }
   return outputChannel;
+}
+
+async function configureTerminalInterception(context: vscode.ExtensionContext): Promise<void> {
+  const settings = readSettings();
+  const env = context.environmentVariableCollection;
+  env.persistent = false;
+  env.clear();
+
+  if (!settings.terminalInterceptionEnabled) {
+    await stopBridge();
+    return;
+  }
+
+  const output = getOutputChannel();
+  try {
+    const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
+    const bridge = await ensureBridge(context);
+    const shimDir = await ensureShimDirectory(context, binary);
+
+    env.description = 'Routes dcmview terminal commands into the VS Code dcmview viewer.';
+    env.prepend('PATH', `${shimDir}${path.delimiter}`);
+    env.replace(BRIDGE_URL_ENV, bridge.url);
+    env.replace(BRIDGE_TOKEN_ENV, bridge.token);
+    env.replace(BRIDGE_BINARY_ENV, binary);
+    output.appendLine(`dcmview terminal interception enabled at ${bridge.url}`);
+  } catch (error) {
+    env.clear();
+    output.appendLine(`dcmview terminal interception disabled: ${formatError(error)}`);
+  }
+}
+
+async function ensureBridge(context: vscode.ExtensionContext): Promise<BridgeServer> {
+  if (bridgeServer) {
+    return bridgeServer;
+  }
+
+  const token = crypto.randomBytes(24).toString('hex');
+  const server = http.createServer((request, response) => {
+    void handleBridgeRequest(context, token, request, response);
+  });
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(0, '127.0.0.1', () => {
+      server.off('error', reject);
+      resolve();
+    });
+  });
+
+  const address = server.address();
+  if (!address || typeof address === 'string') {
+    server.close();
+    throw new Error('Unable to start dcmview VS Code bridge.');
+  }
+
+  bridgeServer = {
+    server,
+    token,
+    url: `http://127.0.0.1:${address.port}`,
+  };
+  return bridgeServer;
+}
+
+async function stopBridge(): Promise<void> {
+  const bridge = bridgeServer;
+  bridgeServer = undefined;
+  if (!bridge) {
+    return;
+  }
+
+  await new Promise<void>((resolve) => {
+    bridge.server.close(() => resolve());
+  });
+}
+
+async function handleBridgeRequest(
+  context: vscode.ExtensionContext,
+  token: string,
+  request: http.IncomingMessage,
+  response: http.ServerResponse,
+): Promise<void> {
+  try {
+    if (!isAuthorizedBridgeRequest(request, token)) {
+      writeJson(response, 401, { error: 'unauthorized' });
+      return;
+    }
+
+    const url = new URL(request.url ?? '/', 'http://127.0.0.1');
+    if (request.method === 'POST' && url.pathname === '/launch') {
+      const launchRequest = await readJsonBody<BridgeLaunchRequest>(request);
+      const launchResponse = await launchFromBridge(context, launchRequest);
+      writeJson(response, 200, launchResponse);
+      return;
+    }
+
+    const stopMatch = /^\/sessions\/([^/]+)\/stop$/.exec(url.pathname);
+    if (request.method === 'POST' && stopMatch) {
+      const session = sessionsById.get(stopMatch[1]);
+      if (!session) {
+        writeJson(response, 404, { error: 'session not found' });
+        return;
+      }
+      await stopSession(session);
+      writeJson(response, 200, { ok: true });
+      return;
+    }
+
+    writeJson(response, 404, { error: 'not found' });
+  } catch (error) {
+    writeJson(response, 500, { error: formatError(error) });
+  }
+}
+
+function isAuthorizedBridgeRequest(request: http.IncomingMessage, token: string): boolean {
+  const auth = request.headers.authorization;
+  if (auth === `Bearer ${token}`) {
+    return true;
+  }
+  return request.headers['x-dcmview-token'] === token;
+}
+
+async function launchFromBridge(
+  context: vscode.ExtensionContext,
+  request: BridgeLaunchRequest,
+): Promise<BridgeLaunchResponse> {
+  const settings = readSettings();
+  const output = getOutputChannel();
+  const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
+  const args = normalizeInterceptedArgs(request.args ?? []);
+  const cwd = request.cwd && path.isAbsolute(request.cwd) ? request.cwd : firstWorkspacePath();
+  const title = `dcmview: ${request.program ?? 'terminal'}`;
+  const session = await startSession(context, binary, args, cwd, title, settings, output);
+  const response: BridgeLaunchResponse = {
+    sessionId: session.id,
+    url: session.url,
+  };
+  if (request.wait) {
+    response.exitCode = await session.exitCode;
+  }
+  return response;
+}
+
+function firstWorkspacePath(): string {
+  return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+}
+
+async function readJsonBody<T>(request: http.IncomingMessage): Promise<T> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    totalBytes += buffer.byteLength;
+    if (totalBytes > 1024 * 1024) {
+      throw new Error('Bridge request body is too large.');
+    }
+    chunks.push(buffer);
+  }
+  return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
+}
+
+function writeJson(response: http.ServerResponse, statusCode: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  response.writeHead(statusCode, {
+    'Content-Type': 'application/json',
+    'Content-Length': Buffer.byteLength(payload),
+  });
+  response.end(payload);
+}
+
+async function ensureShimDirectory(context: vscode.ExtensionContext, binary: string): Promise<string> {
+  const shimDir = path.join(context.globalStorageUri.fsPath, 'terminal-shims');
+  await fs.promises.mkdir(shimDir, { recursive: true });
+  await Promise.all([
+    writeShim(shimDir, 'dcmview', binary, 'dcmview'),
+    writeShim(shimDir, 'dcmview-py', binary, 'dcmview-py'),
+  ]);
+  return shimDir;
+}
+
+async function writeShim(
+  shimDir: string,
+  name: string,
+  binary: string,
+  program: string,
+): Promise<void> {
+  if (process.platform === 'win32') {
+    const filePath = path.join(shimDir, `${name}.cmd`);
+    await fs.promises.writeFile(filePath, windowsShim(binary, program), 'utf8');
+    return;
+  }
+
+  const filePath = path.join(shimDir, name);
+  await fs.promises.writeFile(filePath, posixShim(binary, program), { encoding: 'utf8', mode: 0o755 });
+  await fs.promises.chmod(filePath, 0o755);
+}
+
+export function posixShim(binary: string, program: string): string {
+  return `#!/bin/sh
+if [ "\${${BRIDGE_BYPASS_ENV}:-}" = "1" ]; then
+  exec ${shellSingleQuote(binary)} "$@"
+fi
+exec ${shellSingleQuote(binary)} --vscode-bridge-client ${shellSingleQuote(program)} "$@"
+`;
+}
+
+export function windowsShim(binary: string, program: string): string {
+  return `@echo off\r
+if "%${BRIDGE_BYPASS_ENV}%"=="1" (\r
+  "${binary}" %*\r
+  exit /b %ERRORLEVEL%\r
+)\r
+"${binary}" --vscode-bridge-client ${program} %*\r
+exit /b %ERRORLEVEL%\r
+`;
+}
+
+function shellSingleQuote(value: string): string {
+  return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
 function shellQuote(value: string): string {

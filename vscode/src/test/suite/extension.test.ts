@@ -4,9 +4,12 @@ import * as vscode from 'vscode';
 import {
   binaryCandidates,
   collectFileSystemPaths,
+  normalizeInterceptedArgs,
   parseStartupLine,
+  posixShim,
   waitForStartup,
   waitForStartupOrTerminate,
+  windowsShim,
 } from '../../extension';
 
 class FakeChild extends EventEmitter {
@@ -86,6 +89,34 @@ suite('dcmview extension', () => {
     assert.deepStrictEqual(candidates[0], { kind: 'path', value: '/custom/dcmview' });
     assert.ok(candidates.some((candidate) => candidate.value.includes('target/debug/dcmview')));
     assert.strictEqual(candidates[candidates.length - 1].kind, 'path-name');
+  });
+
+  test('normalizes terminal-intercepted args without clobbering explicit host and port', () => {
+    assert.deepStrictEqual(normalizeInterceptedArgs(['/tmp/scan.dcm']), [
+      '--port',
+      '0',
+      '--host',
+      '127.0.0.1',
+      '--startup-json',
+      '--no-browser',
+      '/tmp/scan.dcm',
+    ]);
+
+    assert.deepStrictEqual(
+      normalizeInterceptedArgs(['--host', 'localhost', '-p', '8888', '--no-browser', '/tmp/scan.dcm']),
+      ['--startup-json', '--host', 'localhost', '-p', '8888', '--no-browser', '/tmp/scan.dcm'],
+    );
+  });
+
+  test('generates shims that route through the bridge client with bypass fallback', () => {
+    const posix = posixShim('/repo/target/debug/dcmview', 'dcmview-py');
+    assert.ok(posix.includes('DCMVIEW_VSCODE_BYPASS'));
+    assert.ok(posix.includes('--vscode-bridge-client'));
+    assert.ok(posix.includes("'dcmview-py'"));
+
+    const windows = windowsShim('C:\\repo\\target\\debug\\dcmview.exe', 'dcmview');
+    assert.ok(windows.includes('DCMVIEW_VSCODE_BYPASS'));
+    assert.ok(windows.includes('--vscode-bridge-client dcmview'));
   });
 
   test('registers public commands', async () => {
