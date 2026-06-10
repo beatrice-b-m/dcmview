@@ -6,7 +6,9 @@ The committed corpus is intentionally small and synthetic:
 
 - `golden-uncompressed-u16-multiframe.dcm`
 - `golden-jpeg-baseline-single-frame.dcm`
+- `golden-jpeg-baseline-large-single-frame.dcm`
 - `golden-jpeg-baseline-multiframe-bot.dcm`
 - `golden-no-pixels-sr.dcm`
 
-The goal is stable decoding and contract coverage, not realistic clinical dimensions.
+The goal is stable decoding and contract coverage. The large single-frame JPEG
+fixture keeps file size small while exercising realistic viewport geometry.

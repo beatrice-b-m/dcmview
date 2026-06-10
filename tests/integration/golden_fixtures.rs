@@ -114,6 +114,33 @@ async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
 }
 
 #[tokio::test]
+async fn golden_large_single_frame_jpeg_fixture_exercises_viewer_geometry() {
+    let path = fixture_path("golden-jpeg-baseline-large-single-frame.dcm");
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover large JPEG fixture");
+    assert_eq!(report.files.len(), 1);
+
+    let file = &report.files[0];
+    assert!(file.has_pixels);
+    assert_eq!(file.frame_count, 1);
+    assert_eq!(file.rows, 2560);
+    assert_eq!(file.columns, 3328);
+    assert_eq!(file.default_window.expect("default window").center, 128.0);
+
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let response = test_server.get("/api/file/0/frame/0").await;
+    response.assert_status_ok();
+
+    let decoded =
+        image::load_from_memory_with_format(response.as_bytes().as_ref(), ImageFormat::Png)
+            .expect("decoded large PNG")
+            .to_luma8();
+    assert_eq!(decoded.width(), 3328);
+    assert_eq!(decoded.height(), 2560);
+}
+
+#[tokio::test]
 async fn golden_multiframe_jpeg_fixture_has_offset_table_and_decodes_by_frame() {
     let path = fixture_path("golden-jpeg-baseline-multiframe-bot.dcm");
     let obj = open_file(&path).expect("open multiframe jpeg fixture");
