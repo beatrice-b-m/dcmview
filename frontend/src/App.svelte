@@ -26,10 +26,6 @@
 	type OpenTabState = {
 		fileIndex: number;
 		currentFrame: number;
-		windowCenter: number | null;
-		windowWidth: number | null;
-		windowMode: WindowMode;
-		selectedPresetId: string;
 	};
 
 	let filesResponse = $state<FilesResponse | null>(null);
@@ -43,6 +39,7 @@
 	let activeTool = $state<ActiveTool>('pan');
 	let windowMode = $state<WindowMode>('default');
 	let selectedPresetId = $state('default');
+	let lastAppliedPresetId = 'default';
 	let resetCount = $state(0);
 	let orientationByFile = $state<Record<number, ImageOrientation>>({});
 	let fileNavigatorCollapsed = $state(false);
@@ -63,10 +60,6 @@
 		return {
 			fileIndex,
 			currentFrame: 0,
-			windowCenter: null,
-			windowWidth: null,
-			windowMode: 'default',
-			selectedPresetId: 'default',
 		};
 	}
 
@@ -76,10 +69,6 @@
 			? {
 				...tab,
 				currentFrame,
-				windowCenter,
-				windowWidth,
-				windowMode,
-				selectedPresetId,
 			}
 			: tab);
 	}
@@ -88,19 +77,11 @@
 		if (!tab) {
 			activeFileIndex = null;
 			currentFrame = 0;
-			windowCenter = null;
-			windowWidth = null;
-			windowMode = 'default';
-			selectedPresetId = 'default';
 			return;
 		}
 
 		activeFileIndex = tab.fileIndex;
 		currentFrame = tab.currentFrame;
-		windowCenter = tab.windowCenter;
-		windowWidth = tab.windowWidth;
-		windowMode = tab.windowMode;
-		selectedPresetId = tab.selectedPresetId;
 	}
 
 	function activateOpenTab(fileIndex: number) {
@@ -233,9 +214,8 @@
 		sidebarResizeState = null;
 	}
 
-	$effect(() => {
-		if (activeFileIndex === null) return;
-		const preset = WL_PRESETS.find(p => p.id === selectedPresetId);
+	function applyWindowPreset(presetId: string) {
+		const preset = WL_PRESETS.find(p => p.id === presetId);
 		if (!preset) return;
 		if (preset.wc !== undefined && preset.ww !== undefined) {
 			windowCenter = preset.wc;
@@ -246,6 +226,13 @@
 			windowWidth = null;
 			windowMode = preset.mode ?? 'default';
 		}
+	}
+
+	$effect(() => {
+		const presetId = selectedPresetId;
+		if (presetId === lastAppliedPresetId) return;
+		lastAppliedPresetId = presetId;
+		applyWindowPreset(presetId);
 	});
 
 	$effect(() => {
