@@ -16,10 +16,10 @@ Marketplace builds currently bundle `dcmview` binaries for:
 - Linux x64
 - macOS x64
 - macOS arm64
+- Windows x64
 
-Windows and other platforms are not published yet. On unsupported platforms, or
-when you need to test a locally built binary, set `dcmview.binaryPath` to an
-absolute path to a compatible `dcmview` executable.
+On unsupported platforms, or when you need to test a locally built binary, set
+`dcmview.binaryPath` to an absolute path to a compatible `dcmview` executable.
 
 ## Usage
 
