@@ -87,7 +87,10 @@
     "@types/node": "^20.14.11",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^2.4.1",
-    "mocha": "^10.7.3",
+    "mocha": "^11.3.0",
     "typescript": "^5.7.2"
+  },
+  "overrides": {
+    "serialize-javascript": "7.0.5"
   }
 }
