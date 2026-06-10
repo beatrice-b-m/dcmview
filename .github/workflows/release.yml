@@ -130,10 +130,36 @@ jobs:
           tests/fixtures/golden-uncompressed-u16-multiframe.dcm
           tests/fixtures/golden-no-pixels-sr.dcm
 
+  package-vscode:
+    needs: build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: vscode/package-lock.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Install VS Code extension dependencies
+        run: npm --prefix vscode ci
+      - name: Package universal VSIX
+        run: npm --prefix vscode run package:release
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vscode-vsix
+          path: dist/*.vsix
+
   release:
     needs:
       - build
       - validate-linux
+      - package-vscode
     runs-on: ubuntu-22.04
     outputs:
       formula_path: ${{ steps.formula.outputs.formula_path }}
@@ -168,6 +194,7 @@ jobs:
           files: |
             artifacts/**/*.tar.gz
             artifacts/**/*.whl
+            artifacts/**/*.vsix
             packaging/homebrew/dcmview.rb
       - uses: actions/upload-artifact@v4
         with:

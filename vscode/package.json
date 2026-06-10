@@ -2,10 +2,14 @@
   "name": "dcmview-vscode",
   "displayName": "dcmview",
   "description": "Open DICOM files and folders in dcmview from VS Code.",
-  "version": "0.1.0",
+  "version": "0.1.5",
   "private": true,
   "publisher": "dcmview",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/beatrice-b-m/dcmview.git"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -54,7 +58,7 @@
         "dcmview.binaryPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the dcmview binary. When empty, the extension tries the repo debug binary and then PATH."
+          "description": "Absolute path to the dcmview binary. When empty, the extension tries the repo debug binary, bundled closed-test binaries, and then PATH."
         },
         "dcmview.defaultRecursive": {
           "type": "boolean",
@@ -86,13 +90,17 @@
   "scripts": {
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
-    "test": "npm run compile && node ./out/test/runTest.js"
+    "test": "npm run compile && node ./out/test/runTest.js",
+    "stage:binaries": "python3 ../scripts/stage_vscode_binaries.py",
+    "package": "npm run compile && vsce package --no-dependencies --out ../dist/dcmview-vscode-${npm_package_version}.vsix",
+    "package:release": "npm run stage:binaries -- --artifacts-dir ../artifacts && npm run package"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
     "@types/node": "^20.14.11",
     "@types/vscode": "^1.90.0",
     "@vscode/test-electron": "^2.4.1",
+    "@vscode/vsce": "^3.9.2",
     "mocha": "^11.3.0",
     "typescript": "^5.7.2"
   },

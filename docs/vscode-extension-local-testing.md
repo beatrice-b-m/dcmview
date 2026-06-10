@@ -1,8 +1,8 @@
 # VS Code extension local testing
 
 The VS Code extension is a local development wrapper around the existing
-`dcmview` binary. It does not include Marketplace publishing or bundled release
-binary packaging yet.
+`dcmview` binary. Closed-test VSIX builds bundle release binaries for Linux x64,
+macOS x64, and macOS arm64. Marketplace publishing is still out of scope.
 
 ## One-time setup
 
@@ -15,7 +15,10 @@ The extension resolves binaries in this order:
 
 1. `dcmview.binaryPath` VS Code setting.
 2. `target/debug/dcmview` from this repository.
-3. `dcmview` on `PATH`.
+3. `vscode/resources/bin/<platform>-<arch>/dcmview` bundled in closed-test VSIX
+   builds, where supported platform directories are `linux-x64`, `darwin-x64`,
+   and `darwin-arm64`.
+4. `dcmview` on `PATH`.
 
 When `dcmview.terminalInterception.enabled` is true, the extension starts a
 private loopback bridge and prepends generated shims to new integrated
@@ -90,3 +93,22 @@ npm --prefix vscode test
 
 `npm --prefix vscode test` uses `@vscode/test-electron` and may download a VS
 Code test build into `vscode/.vscode-test/`.
+
+## Closed-test VSIX packaging
+
+Release automation stages binaries from the platform release archives into
+`vscode/resources/bin/**` and packages one universal VSIX:
+
+```bash
+npm --prefix vscode run package:release
+```
+
+That command expects downloaded release artifacts under `artifacts/`. For local
+packaging experiments, create matching `dcmview-*-<target>.tar.gz` archives for
+`x86_64-unknown-linux-gnu`, `x86_64-apple-darwin`, and
+`aarch64-apple-darwin`, or use `dcmview.binaryPath` to test a local binary
+without bundling.
+
+Install or update a closed-test VSIX from VS Code with `Extensions: Install
+from VSIX...`. If the bundled binary is not right for the host, set
+`dcmview.binaryPath` to an absolute path and reload the extension host.

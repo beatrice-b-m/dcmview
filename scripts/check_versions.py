@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import pathlib
 import re
 import sys
@@ -51,6 +52,14 @@ def normalize_tag(tag: str) -> str:
 	return version
 
 
+def read_package_json_version(path: pathlib.Path) -> str:
+	data = json.loads(path.read_text(encoding="utf-8"))
+	version = data.get("version")
+	if not isinstance(version, str) or not version:
+		raise ValueError(f"{path.name} does not define version")
+	return version
+
+
 def main() -> int:
 	parser = argparse.ArgumentParser(description="Validate dcmview release versions")
 	parser.add_argument(
@@ -67,14 +76,16 @@ def main() -> int:
 	try:
 		cargo_version = read_toml_version(REPO_ROOT / "Cargo.toml", "package")
 		python_version = read_toml_version(REPO_ROOT / "pyproject.toml", "project")
+		vscode_version = read_package_json_version(REPO_ROOT / "vscode" / "package.json")
 	except ValueError as error:
 		print(str(error), file=sys.stderr)
 		return 1
 
-	if cargo_version != python_version:
+	if cargo_version != python_version or cargo_version != vscode_version:
 		print(
 			f"version mismatch: Cargo.toml has {cargo_version}, "
-			f"pyproject.toml has {python_version}",
+			f"pyproject.toml has {python_version}, "
+			f"vscode/package.json has {vscode_version}",
 			file=sys.stderr,
 		)
 		return 1
