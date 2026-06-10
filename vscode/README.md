@@ -45,8 +45,3 @@ integration for a single shell session.
 - `dcmview.terminalInterception.enabled`: route integrated terminal launches
   into VS Code webviews.
 
-## Marketplace Assets
-
-This listing intentionally ships without a custom icon for the initial
-Marketplace release. A PNG icon and screenshots should be added before broader
-promotion.
