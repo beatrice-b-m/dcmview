@@ -92,11 +92,11 @@ class WrapperTests(unittest.TestCase):
 						annotations=None,
 					)
 
-		self.assertEqual(command[0], "/tmp/env-dcmview")
+		self.assertEqual(command[0], str(Path("/tmp/env-dcmview")))
 		ensure_mock.assert_called_once()
 
 	def test_prefers_bundled_binary_before_path_lookup(self) -> None:
-		bundled = (PYTHON_SRC / "dcmview_py" / "bin" / "dcmview").resolve()
+		bundled = (PYTHON_SRC / "dcmview_py" / "bin" / wrapper._binary_name()).resolve()
 		with mock.patch.dict(os.environ, {}, clear=True):
 			with mock.patch.object(wrapper.Path, "is_file", return_value=True):
 				with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/usr/local/bin/dcmview"):
