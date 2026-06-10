@@ -29,10 +29,16 @@
 
 	type PipelineMode = "cine" | "diagnostic_wl";
 	type TransformState = { scale: number; tx: number; ty: number; fit: boolean };
+	type ZoomAnchor = {
+		clientX: number;
+		clientY: number;
+		localX: number;
+		localY: number;
+	};
 	type DragState =
 		| { mode: "pan"; startX: number; startY: number; baseTx: number; baseTy: number }
 		| { mode: "wl"; startX: number; startY: number; baseCenter: number; baseWidth: number }
-		| { mode: "zoom_drag"; startX: number; startY: number; baseScale: number; pivotX: number; pivotY: number }
+		| { mode: "zoom_drag"; startY: number; baseScale: number; anchor: ZoomAnchor }
 		| { mode: "scroll_drag"; startY: number; baseFrame: number }
 		| { mode: "draw_roi"; start: ImagePoint; current: ImagePoint }
 		| { mode: "move_roi"; roiIndex: number; start: ImagePoint; original: RoiCoord }
@@ -1358,19 +1364,55 @@ function startDisplayPrefetch(
 		dragState = null;
 	});
 
+	function zoomAnchorFromClient(clientX: number, clientY: number): ZoomAnchor | null {
+		const origin = imageLayoutOrigin();
+		if (!origin) return null;
+		const { scale, tx, ty } = activeTransform;
+		return {
+			clientX,
+			clientY,
+			localX: (clientX - origin.left - tx) / scale,
+			localY: (clientY - origin.top - ty) / scale,
+		};
+	}
+
+	function zoomTransformForAnchor(newScale: number, anchor: ZoomAnchor): Omit<TransformState, "fit"> | null {
+		const origin = imageLayoutOrigin();
+		if (!origin) return null;
+		const clamped = clampZoom(newScale);
+		return {
+			scale: clamped,
+			tx: anchor.clientX - origin.left - anchor.localX * clamped,
+			ty: anchor.clientY - origin.top - anchor.localY * clamped,
+		};
+	}
+
 	function zoomAt(newScale: number, clientX: number, clientY: number) {
 		if (!activeFile || !canvasEl) return;
-		const { scale, tx, ty } = activeTransform;
-		const clamped = clampZoom(newScale);
-		const origin = imageLayoutOrigin();
-		if (!origin) return;
-		const lx = (clientX - origin.left - tx) / scale;
-		const ly = (clientY - origin.top - ty) / scale;
-		updateTransform(activeFile.index, {
-			scale: clamped,
-			tx: clientX - origin.left - lx * clamped,
-			ty: clientY - origin.top - ly * clamped,
-		});
+		const anchor = zoomAnchorFromClient(clientX, clientY);
+		if (!anchor) return;
+		const transform = zoomTransformForAnchor(newScale, anchor);
+		if (!transform) return;
+		updateTransform(activeFile.index, transform);
+	}
+
+	function startZoomDrag(event: PointerEvent): DragState {
+		const anchor = zoomAnchorFromClient(event.clientX, event.clientY);
+		if (!anchor) return null;
+		return {
+			mode: "zoom_drag",
+			startY: event.clientY,
+			baseScale: activeTransform.scale,
+			anchor,
+		};
+	}
+
+	function applyZoomDrag(drag: Extract<NonNullable<DragState>, { mode: "zoom_drag" }>, clientY: number) {
+		if (!activeFile) return;
+		const dy = clientY - drag.startY;
+		const transform = zoomTransformForAnchor(drag.baseScale * Math.exp(-dy * 0.005), drag.anchor);
+		if (!transform) return;
+		updateTransform(activeFile.index, transform);
 	}
 
 	function wheelDeltaPixels(event: WheelEvent): { dx: number; dy: number } {
@@ -1475,14 +1517,7 @@ function startDisplayPrefetch(
 					};
 					break;
 				case "zoom":
-					nextDragState = {
-						mode: "zoom_drag",
-						startX: event.clientX,
-						startY: event.clientY,
-						baseScale: activeTransform.scale,
-						pivotX: event.clientX,
-						pivotY: event.clientY,
-					};
+					nextDragState = startZoomDrag(event);
 					break;
 				case "scroll":
 					if (activeFile.frame_count > 1) {
@@ -1545,9 +1580,7 @@ function startDisplayPrefetch(
 		}
 
 		if (dragState.mode === "zoom_drag") {
-			const dy = event.clientY - dragState.startY;
-			const newScale = Math.min(8, Math.max(0.2, dragState.baseScale * Math.exp(-dy * 0.005)));
-			zoomAt(newScale, dragState.pivotX, dragState.pivotY);
+			applyZoomDrag(dragState, event.clientY);
 			return;
 		}
 
@@ -1785,8 +1818,6 @@ function startDisplayPrefetch(
 	.viewport.dragging { cursor: grabbing; }
 	.image-layer {
 		position: relative;
-		max-width: 100%;
-		max-height: 100%;
 		transform-origin: 0 0;
 		transition: transform 0.03s linear;
 	}
