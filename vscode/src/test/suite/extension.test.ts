@@ -99,6 +99,21 @@ suite('dcmview extension', () => {
     assert.strictEqual(candidates[candidates.length - 1].kind, 'path-name');
   });
 
+  test('generates Windows x64 binary candidates', () => {
+    const candidates = binaryCandidates('C:\\repo\\vscode', '', 'win32', 'x64');
+
+    assert.ok(candidates.some((candidate) => candidate.value.includes('target/debug/dcmview.exe')));
+    assert.ok(
+      candidates.some((candidate) =>
+        candidate.value.includes(path.join('resources', 'bin', 'win32-x64', 'dcmview.exe')),
+      ),
+    );
+    assert.deepStrictEqual(candidates[candidates.length - 1], {
+      kind: 'path-name',
+      value: 'dcmview.exe',
+    });
+  });
+
   test('normalizes terminal-intercepted args without clobbering explicit host and port', () => {
     assert.deepStrictEqual(normalizeInterceptedArgs(['/tmp/scan.dcm']), [
       '--port',

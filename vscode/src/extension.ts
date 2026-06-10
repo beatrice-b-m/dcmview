@@ -193,8 +193,10 @@ async function resolveBinaryPath(extensionRoot: string, configuredBinary: string
 export function binaryCandidates(
   extensionRoot: string,
   configuredBinary: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
 ): Array<{ kind: 'path' | 'path-name'; value: string }> {
-  const executable = process.platform === 'win32' ? 'dcmview.exe' : 'dcmview';
+  const executable = platform === 'win32' ? 'dcmview.exe' : 'dcmview';
   const candidates: Array<{ kind: 'path' | 'path-name'; value: string }> = [];
   if (configuredBinary.length > 0) {
     candidates.push({ kind: 'path', value: configuredBinary });
@@ -207,7 +209,7 @@ export function binaryCandidates(
         extensionRoot,
         'resources',
         'bin',
-        `${process.platform}-${process.arch}`,
+        `${platform}-${arch}`,
         executable,
       ),
     },
