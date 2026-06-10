@@ -1,13 +1,17 @@
 <script lang="ts">
 	import type { FileSummary } from "../api";
 
+	type NavKind = "patient" | "study" | "series" | "image";
+
 	type NavFile = {
+		kind: "image";
 		file: FileSummary;
 		label: string;
 		detail: string;
 	};
 
 	type NavSeries = {
+		kind: "series";
 		key: string;
 		label: string;
 		detail: string;
@@ -15,6 +19,7 @@
 	};
 
 	type NavStudy = {
+		kind: "study";
 		key: string;
 		label: string;
 		detail: string;
@@ -22,6 +27,7 @@
 	};
 
 	type NavPatient = {
+		kind: "patient";
 		key: string;
 		label: string;
 		detail: string;
@@ -79,26 +85,52 @@
 		collapsedNodes = { ...collapsedNodes, [key]: !isCollapsed(key) };
 	}
 
+	function plural(count: number, singular: string): string {
+		return `${count} ${singular}${count === 1 ? "" : "s"}`;
+	}
+
+	function tierLabel(kind: NavKind): string {
+		switch (kind) {
+			case "patient":
+				return "Patient";
+			case "study":
+				return "Study";
+			case "series":
+				return "Series";
+			case "image":
+				return "Image";
+		}
+	}
+
+	function countStudyFiles(study: NavStudy): number {
+		return study.series.reduce((total, series) => total + series.files.length, 0);
+	}
+
+	function countPatientSeries(patient: NavPatient): number {
+		return patient.studies.reduce((total, study) => total + study.series.length, 0);
+	}
+
+	function countPatientFiles(patient: NavPatient): number {
+		return patient.studies.reduce((total, study) => total + countStudyFiles(study), 0);
+	}
+
 	function patientLabel(file: FileSummary): string {
 		return formatPersonName(clean(file.patient_name)) || clean(file.patient_id) || "Unknown Patient";
 	}
 
 	function patientDetail(file: FileSummary): string {
 		const id = clean(file.patient_id);
-		return id && id !== patientLabel(file) ? id : "";
+		return id && id !== patientLabel(file) ? `ID ${id}` : "";
 	}
 
 	function studyLabel(file: FileSummary): string {
-		return clean(file.study_description)
-			|| formatDate(file.study_date)
-			|| shortUid(file.study_instance_uid)
-			|| "Unknown Study";
+		return clean(file.study_description) || "Study";
 	}
 
 	function studyDetail(file: FileSummary): string {
 		const date = formatDate(file.study_date);
 		const uid = shortUid(file.study_instance_uid);
-		return [date && date !== studyLabel(file) ? date : "", uid && uid !== studyLabel(file) ? uid : ""]
+		return [date, uid && uid !== studyLabel(file) ? uid : ""]
 			.filter(Boolean)
 			.join(" · ");
 	}
@@ -106,16 +138,18 @@
 	function seriesLabel(file: FileSummary): string {
 		const description = clean(file.series_description);
 		const number = clean(file.series_number);
-		const modality = clean(file.modality);
-		if (description && number) return `${number} · ${description}`;
-		return description || [modality, number ? `Series ${number}` : ""].filter(Boolean).join(" · ")
+		return description || (number ? `Series ${number}` : "")
 			|| shortUid(file.series_instance_uid)
 			|| "Unknown Series";
 	}
 
 	function seriesDetail(file: FileSummary): string {
+		const modality = clean(file.modality);
+		const number = clean(file.series_number);
 		const uid = shortUid(file.series_instance_uid);
-		return uid && uid !== seriesLabel(file) ? uid : "";
+		return [modality, number ? `Series ${number}` : "", uid && uid !== seriesLabel(file) ? uid : ""]
+			.filter(Boolean)
+			.join(" · ");
 	}
 
 	function fileLabel(file: FileSummary): string {
@@ -131,6 +165,42 @@
 		return [dimensions, frames].filter(Boolean).join(" · ");
 	}
 
+	function withCounts(detail: string, counts: string[]): string {
+		return [detail, ...counts].filter(Boolean).join(" · ");
+	}
+
+	function patientDetailWithCounts(patient: NavPatient): string {
+		return withCounts(patient.detail, [
+			plural(patient.studies.length, "study"),
+			plural(countPatientSeries(patient), "series"),
+			plural(countPatientFiles(patient), "image"),
+		]);
+	}
+
+	function studyDetailWithCounts(study: NavStudy): string {
+		return withCounts(study.detail, [
+			plural(study.series.length, "series"),
+			plural(countStudyFiles(study), "image"),
+		]);
+	}
+
+	function seriesDetailWithCounts(series: NavSeries): string {
+		return withCounts(series.detail, [
+			plural(series.files.length, "image"),
+		]);
+	}
+
+	function nodeAriaLabel(kind: Exclude<NavKind, "image">, label: string, detail: string, collapsedState: boolean): string {
+		const state = collapsedState ? "collapsed" : "expanded";
+		const kindLabel = tierLabel(kind);
+		const primary = label === kindLabel ? kindLabel : `${kindLabel} ${label}`;
+		return `${primary}${detail ? `, ${detail}` : ""}, ${state}`;
+	}
+
+	function fileAriaLabel(item: NavFile): string {
+		return `${tierLabel(item.kind)} ${item.label}${item.detail ? `, ${item.detail}` : ""}`;
+	}
+
 	const tree = $derived.by(() => {
 		const patients = new Map<string, NavPatient>();
 
@@ -139,6 +209,7 @@
 			let patient = patients.get(patientKey);
 			if (!patient) {
 				patient = {
+					kind: "patient",
 					key: patientKey,
 					label: patientLabel(file),
 					detail: patientDetail(file),
@@ -151,6 +222,7 @@
 			let study = patient.studies.find((item) => item.key === studyKey);
 			if (!study) {
 				study = {
+					kind: "study",
 					key: studyKey,
 					label: studyLabel(file),
 					detail: studyDetail(file),
@@ -163,6 +235,7 @@
 			let series = study.series.find((item) => item.key === seriesKey);
 			if (!series) {
 				series = {
+					kind: "series",
 					key: seriesKey,
 					label: seriesLabel(file),
 					detail: seriesDetail(file),
@@ -172,6 +245,7 @@
 			}
 
 			series.files.push({
+				kind: "image",
 				file,
 				label: fileLabel(file),
 				detail: fileDetail(file),
@@ -181,6 +255,14 @@
 		return Array.from(patients.values());
 	});
 </script>
+
+{#snippet nodeContent(kind: NavKind, label: string, detail: string)}
+	<span class="kind-badge">{tierLabel(kind)}</span>
+	<span class="node-text">
+		<span class="node-label">{label}</span>
+		{#if detail}<span class="node-detail">{detail}</span>{/if}
+	</span>
+{/snippet}
 
 <aside class="navigator" class:collapsed>
 	<div class="navigator-header">
@@ -201,31 +283,43 @@
 	{#if !collapsed}
 		<div class="tree" role="tree" aria-label="DICOM file hierarchy">
 			{#each tree as patient}
+				{@const patientDetail = patientDetailWithCounts(patient)}
 				<section class="tree-group">
-					<button type="button" class="tree-header depth-0" onclick={() => toggleNode(patient.key)}>
+					<button
+						type="button"
+						class="tree-header depth-0"
+						aria-label={nodeAriaLabel(patient.kind, patient.label, patientDetail, isCollapsed(patient.key))}
+						aria-expanded={!isCollapsed(patient.key)}
+						onclick={() => toggleNode(patient.key)}
+					>
 						<span class="twisty">{isCollapsed(patient.key) ? "▶" : "▼"}</span>
-						<span class="node-text">
-							<span class="node-label">{patient.label}</span>
-							{#if patient.detail}<span class="node-detail">{patient.detail}</span>{/if}
-						</span>
+						{@render nodeContent(patient.kind, patient.label, patientDetail)}
 					</button>
 					{#if !isCollapsed(patient.key)}
 						{#each patient.studies as study}
-							<button type="button" class="tree-header depth-1" onclick={() => toggleNode(study.key)}>
+							{@const studyDetail = studyDetailWithCounts(study)}
+							<button
+								type="button"
+								class="tree-header depth-1"
+								aria-label={nodeAriaLabel(study.kind, study.label, studyDetail, isCollapsed(study.key))}
+								aria-expanded={!isCollapsed(study.key)}
+								onclick={() => toggleNode(study.key)}
+							>
 								<span class="twisty">{isCollapsed(study.key) ? "▶" : "▼"}</span>
-								<span class="node-text">
-									<span class="node-label">{study.label}</span>
-									{#if study.detail}<span class="node-detail">{study.detail}</span>{/if}
-								</span>
+								{@render nodeContent(study.kind, study.label, studyDetail)}
 							</button>
 							{#if !isCollapsed(study.key)}
 								{#each study.series as series}
-									<button type="button" class="tree-header depth-2" onclick={() => toggleNode(series.key)}>
+									{@const seriesDetail = seriesDetailWithCounts(series)}
+									<button
+										type="button"
+										class="tree-header depth-2"
+										aria-label={nodeAriaLabel(series.kind, series.label, seriesDetail, isCollapsed(series.key))}
+										aria-expanded={!isCollapsed(series.key)}
+										onclick={() => toggleNode(series.key)}
+									>
 										<span class="twisty">{isCollapsed(series.key) ? "▶" : "▼"}</span>
-										<span class="node-text">
-											<span class="node-label">{series.label}</span>
-											{#if series.detail}<span class="node-detail">{series.detail}</span>{/if}
-										</span>
+										{@render nodeContent(series.kind, series.label, seriesDetail)}
 									</button>
 									{#if !isCollapsed(series.key)}
 										{#each series.files as item}
@@ -235,9 +329,9 @@
 												class:active={item.file.index === activeFileIndex}
 												onclick={() => onopenfile(item.file.index)}
 												title={item.file.path}
+												aria-label={fileAriaLabel(item)}
 											>
-												<span class="file-label">{item.label}</span>
-												<span class="file-detail">{item.detail}</span>
+												{@render nodeContent(item.kind, item.label, item.detail)}
 											</button>
 										{/each}
 									{/if}
@@ -327,9 +421,9 @@
 
 	.tree-header {
 		display: grid;
-		grid-template-columns: 1.1rem minmax(0, 1fr);
-		align-items: center;
-		gap: 0.25rem;
+		grid-template-columns: 1.1rem 3.35rem minmax(0, 1fr);
+		align-items: start;
+		gap: 0.35rem;
 		padding-top: 0.36rem;
 		padding-bottom: 0.36rem;
 		font-size: 0.81rem;
@@ -337,8 +431,9 @@
 
 	.file-row {
 		display: grid;
-		grid-template-columns: minmax(0, 1fr);
-		gap: 0.1rem;
+		grid-template-columns: 3.35rem minmax(0, 1fr);
+		align-items: start;
+		gap: 0.35rem;
 		padding-top: 0.34rem;
 		padding-bottom: 0.34rem;
 		font-size: 0.8rem;
@@ -363,11 +458,25 @@
 	.twisty {
 		color: var(--text-muted);
 		font-size: 0.72rem;
+		line-height: 1.35;
+		padding-top: 0.08rem;
 	}
 
-	.node-text,
-	.file-label,
-	.file-detail {
+	.kind-badge {
+		display: block;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+		color: var(--text-muted);
+		font-size: 0.6rem;
+		font-weight: 700;
+		letter-spacing: 0.04em;
+		line-height: 1.45;
+		text-transform: uppercase;
+	}
+
+	.node-text {
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -377,16 +486,21 @@
 	.node-text {
 		display: grid;
 		gap: 0.08rem;
+		line-height: 1.25;
 	}
 
 	.node-label {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		color: var(--text-secondary);
 	}
 
-	.node-detail,
-	.file-detail {
+	.file-row.active .node-label {
+		color: var(--text-primary);
+	}
+
+	.node-detail {
 		color: var(--text-muted);
 		font-size: 0.72rem;
 	}
