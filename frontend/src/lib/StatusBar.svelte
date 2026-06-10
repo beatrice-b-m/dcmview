@@ -44,9 +44,18 @@
 		display: flex;
 		justify-content: space-between;
 		gap: 1rem;
-		font-size: 0.85rem;
-		padding: 0.5rem 1rem;
-		background: #242424;
-		border-top: 1px solid #333;
+		font-size: 0.78rem;
+		padding: 0.38rem 0.85rem;
+		background: var(--surface-chrome);
+		border-top: 1px solid var(--border-subtle);
+		color: var(--text-muted);
+		min-width: 0;
+	}
+
+	.status span {
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 	}
 </style>

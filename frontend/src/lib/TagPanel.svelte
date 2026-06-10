@@ -397,7 +397,7 @@
 
 <style>
 	.panel {
-		background: #242424;
+		background: var(--surface-panel);
 		display: grid;
 		grid-template-rows: auto 1fr;
 		height: 100%;
@@ -405,30 +405,44 @@
 	}
 
 	header {
-		padding: 0.75rem;
-		border-bottom: 1px solid #333;
+		padding: 0.7rem;
+		border-bottom: 1px solid var(--border-subtle);
 	}
 
 	h2 {
 		margin: 0 0 0.5rem 0;
-		font-size: 1rem;
+		color: var(--text-secondary);
+		font-size: 0.84rem;
+		font-weight: 650;
 	}
 
 	input {
 		width: 100%;
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		color: #e0e0e0;
-		padding: 0.4rem 0.6rem;
-		border-radius: 6px;
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		color: var(--text-primary);
+		padding: 0.42rem 0.6rem;
+		border-radius: var(--radius-control);
+		font: inherit;
+		font-size: 0.82rem;
+	}
+
+	input::placeholder {
+		color: var(--text-muted);
+	}
+
+	input:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 
 	.table {
 		overflow: auto;
 		min-width: 0;
 		min-height: 0;
-		font-family: "JetBrains Mono", ui-monospace, monospace;
-		font-size: 0.82rem;
+		font-family: var(--font-mono);
+		font-size: 0.8rem;
+		scrollbar-width: thin;
 	}
 
 	.row-grid {
@@ -443,18 +457,18 @@
 		position: sticky;
 		top: 0;
 		z-index: 2;
-		padding: 0.35rem 0.75rem;
-		background: #242424;
-		border-bottom: 1px solid #333;
+		padding: 0.42rem 0.75rem;
+		background: color-mix(in srgb, var(--surface-panel) 94%, black);
+		border-bottom: 1px solid var(--border-subtle);
 	}
 
 	.header-cell {
 		position: relative;
 		min-width: 0;
-		color: #9ca3af;
+		color: var(--text-muted);
 		font-size: 0.72rem;
 		font-weight: 600;
-		letter-spacing: 0.04em;
+		letter-spacing: 0.03em;
 		text-transform: uppercase;
 		user-select: none;
 	}
@@ -484,23 +498,28 @@
 		top: 0.2rem;
 		bottom: 0.2rem;
 		width: 1px;
-		background: #3f3f3f;
+		background: var(--border-subtle);
 		transform: translateX(-50%);
 	}
 
 	.column-resizer.dragging::after {
-		background: #4a9eff;
+		background: var(--accent);
 	}
 
 	.row {
-		padding: 0.35rem 0.75rem;
-		border-bottom: 1px solid #2e2e2e;
+		padding: 0.36rem 0.75rem;
+		border-bottom: 1px solid rgba(255, 255, 255, 0.045);
 		color: inherit;
 		text-align: left;
 	}
 
 	.row:hover {
-		background: #2d2d2d;
+		background: rgba(255, 255, 255, 0.045);
+	}
+
+	.row:focus-visible {
+		outline: none;
+		box-shadow: inset var(--focus-ring);
 	}
 
 	.row > div {
@@ -524,7 +543,7 @@
 
 	.chevron {
 		cursor: pointer;
-		color: #4a9eff;
+		color: var(--accent);
 		font-size: 0.75rem;
 		border: 0;
 		padding: 0;
@@ -554,7 +573,7 @@
 	}
 
 	.binary {
-		color: #9ca3af;
+		color: var(--text-muted);
 	}
 
 	.copied {
@@ -562,7 +581,7 @@
 		right: 0;
 		top: 50%;
 		transform: translateY(-50%);
-		color: #4a9eff;
+		color: var(--accent);
 		font-size: 0.72rem;
 		white-space: nowrap;
 		max-width: 4rem;
@@ -574,5 +593,10 @@
 	.error,
 	.loading {
 		padding: 0.75rem;
+		color: var(--text-muted);
+	}
+
+	.error {
+		color: var(--danger);
 	}
 </style>

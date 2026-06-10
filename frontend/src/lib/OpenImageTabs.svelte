@@ -73,14 +73,15 @@
 	.open-tabs {
 		display: flex;
 		align-items: end;
-		gap: 0.15rem;
+		gap: 0.2rem;
 		min-width: 0;
 		overflow-x: auto;
 		padding-top: 0.3rem;
+		scrollbar-width: thin;
 	}
 
 	.empty-tabs {
-		color: #909090;
+		color: var(--text-muted);
 		font-size: 0.84rem;
 		padding: 0.35rem 0.25rem;
 		white-space: nowrap;
@@ -93,24 +94,24 @@
 		min-width: 9rem;
 		max-width: 16rem;
 		height: 2rem;
-		border: 1px solid #333;
-		border-bottom-color: #242424;
-		border-radius: 6px 6px 0 0;
-		background: #1d1d1d;
-		color: #cfcfcf;
+		border: 1px solid transparent;
+		border-bottom: 0;
+		border-radius: var(--radius-control) var(--radius-control) 0 0;
+		background: rgba(255, 255, 255, 0.035);
+		color: var(--text-secondary);
 		overflow: hidden;
 	}
 
 	.tab:hover {
-		background: #2a2a2a;
-		color: #fff;
+		background: rgba(255, 255, 255, 0.07);
+		color: var(--text-primary);
 	}
 
 	.tab.active {
-		background: #242424;
-		border-color: #4a9eff;
-		border-bottom-color: #242424;
-		color: #fff;
+		background: var(--surface-panel);
+		border-color: var(--border-subtle);
+		color: var(--text-primary);
+		box-shadow: inset 0 2px 0 var(--accent);
 	}
 
 	.tab-main {
@@ -137,7 +138,7 @@
 	}
 
 	.tab-detail {
-		color: #9a9a9a;
+		color: var(--text-muted);
 		font-size: 0.72rem;
 	}
 
@@ -147,20 +148,21 @@
 		width: 1.25rem;
 		height: 1.25rem;
 		border: 0;
-		border-radius: 4px;
+		border-radius: 50%;
 		background: transparent;
-		color: #aaa;
+		color: var(--text-muted);
 		cursor: pointer;
+		font-size: 0.78rem;
 	}
 
 	.close:hover {
-		background: #3a3a3a;
-		color: #fff;
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
 	}
 
 	.tab-main:focus-visible,
 	.close:focus-visible {
-		outline: 2px solid #4a9eff;
-		outline-offset: -2px;
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 </style>

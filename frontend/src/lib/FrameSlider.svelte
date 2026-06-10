@@ -139,31 +139,48 @@
 	.slider {
 		display: flex;
 		flex-wrap: wrap;
-		gap: 0.45rem 0.65rem;
+		gap: 0.42rem 0.55rem;
 		align-items: center;
 		min-width: 0;
-		padding: 0.6rem 1rem;
-		background: #242424;
-		border-top: 1px solid #333;
+		padding: 0.55rem 0.85rem;
+		background: var(--surface-chrome);
+		border-top: 1px solid var(--border-subtle);
+		color: var(--text-secondary);
+		font-size: 0.84rem;
 	}
 	button {
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		color: #e0e0e0;
-		padding: 0.25rem 0.7rem;
-		border-radius: 6px;
+		min-height: var(--control-height);
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		color: var(--text-secondary);
+		padding: 0.22rem 0.65rem;
+		border-radius: var(--radius-control);
+		cursor: pointer;
+		font: inherit;
 	}
 	.play {
 		margin-left: 0.25rem;
-		border-color: #4a9eff;
+		border-color: rgba(10, 132, 255, 0.42);
+		color: var(--text-primary);
 	}
 	.fps-select {
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		color: #e0e0e0;
-		padding: 0.25rem 0.4rem;
-		border-radius: 6px;
+		min-height: var(--control-height);
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		color: var(--text-primary);
+		padding: 0.22rem 1.55rem 0.22rem 0.5rem;
+		border-radius: var(--radius-control);
 		font-size: inherit;
+	}
+	button:hover,
+	.fps-select:hover {
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
+	}
+	button:focus-visible,
+	.fps-select:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 	.mode-toggle {
 		font-size: 0.85em;

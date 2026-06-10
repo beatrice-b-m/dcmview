@@ -61,52 +61,71 @@
 	.toolbar {
 		display: flex;
 		align-items: center;
-		gap: 0.5rem;
-		padding: 0.4rem 0.75rem;
-		background: #242424;
-		border-bottom: 1px solid #333;
+		gap: 0.45rem;
+		padding: 0.38rem 0.7rem;
+		background: var(--surface-chrome);
+		border-bottom: 1px solid var(--border-subtle);
 		min-width: 0;
 		flex-wrap: wrap;
 	}
 	.tool-group {
 		display: flex;
-		gap: 2px;
 		flex: 0 0 auto;
+		padding: 2px;
+		background: rgba(255, 255, 255, 0.045);
+		border: 1px solid var(--border-subtle);
+		border-radius: calc(var(--radius-control) + 2px);
 	}
 	.transform-group {
 		margin-left: auto;
 	}
 	button {
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		color: #e0e0e0;
-		padding: 0.25rem 0.65rem;
-		border-radius: 6px;
+		min-height: var(--control-height);
+		background: transparent;
+		border: 1px solid transparent;
+		color: var(--text-secondary);
+		padding: 0.22rem 0.62rem;
+		border-radius: var(--radius-control);
 		cursor: pointer;
-		font-size: 0.85rem;
+		font: inherit;
+		font-size: 0.82rem;
+		line-height: 1;
 	}
 	button:hover {
-		background: #2a2a2a;
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
+	}
+	.toolbar > button {
+		background: var(--surface-control);
+		border-color: var(--border-subtle);
 	}
 	button.active {
-		border-color: #4a9eff;
-		color: #4a9eff;
-		background: rgba(74, 158, 255, 0.1);
+		border-color: rgba(255, 255, 255, 0.22);
+		color: var(--text-inverse);
+		background: var(--surface-control-active);
+		box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
 	}
 	select {
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		color: #e0e0e0;
-		padding: 0.25rem 0.65rem;
-		border-radius: 6px;
+		min-height: var(--control-height);
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		color: var(--text-primary);
+		padding: 0.22rem 1.8rem 0.22rem 0.65rem;
+		border-radius: var(--radius-control);
 		cursor: pointer;
-		font-size: 0.85rem;
+		font: inherit;
+		font-size: 0.82rem;
+	}
+	button:focus-visible,
+	select:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 	.sep {
 		width: 1px;
 		height: 1.2rem;
-		background: #3a3a3a;
-		margin: 0 0.25rem;
+		background: var(--border-subtle);
+		margin: 0 0.15rem;
 	}
 
 	@media (max-width: 760px) {

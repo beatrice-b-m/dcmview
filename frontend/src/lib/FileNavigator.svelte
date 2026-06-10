@@ -257,13 +257,13 @@
 		grid-template-rows: auto 1fr;
 		min-width: 0;
 		min-height: 0;
-		background: #202020;
-		border-right: 1px solid #333;
+		background: var(--surface-panel);
+		border-right: 1px solid var(--border-subtle);
 		overflow: hidden;
 	}
 
 	.navigator.collapsed {
-		background: #242424;
+		background: var(--surface-chrome);
 	}
 
 	.navigator-header {
@@ -273,8 +273,10 @@
 		gap: 0.5rem;
 		min-height: 2.5rem;
 		padding: 0.55rem 0.65rem;
-		border-bottom: 1px solid #333;
-		font-weight: 700;
+		border-bottom: 1px solid var(--border-subtle);
+		color: var(--text-secondary);
+		font-size: 0.82rem;
+		font-weight: 650;
 	}
 
 	.collapse-button {
@@ -282,28 +284,29 @@
 		place-items: center;
 		width: 1.6rem;
 		height: 1.6rem;
-		border: 1px solid #3a3a3a;
-		border-radius: 4px;
-		background: #1b1b1b;
-		color: #e0e0e0;
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		background: var(--surface-control);
+		color: var(--text-secondary);
 		cursor: pointer;
 	}
 
 	.collapse-button:hover {
-		border-color: #4a9eff;
-		color: #4a9eff;
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
 	}
 
 	.collapse-button:focus-visible,
 	.tree-header:focus-visible,
 	.file-row:focus-visible {
-		outline: 2px solid #4a9eff;
-		outline-offset: -2px;
+		outline: none;
+		box-shadow: inset var(--focus-ring);
 	}
 
 	.tree {
 		overflow: auto;
-		padding: 0.35rem 0;
+		padding: 0.4rem 0;
+		scrollbar-width: thin;
 	}
 
 	.tree-group,
@@ -317,7 +320,7 @@
 		width: 100%;
 		border: 0;
 		background: transparent;
-		color: #d7d7d7;
+		color: var(--text-secondary);
 		text-align: left;
 		cursor: pointer;
 	}
@@ -329,7 +332,7 @@
 		gap: 0.25rem;
 		padding-top: 0.36rem;
 		padding-bottom: 0.36rem;
-		font-size: 0.82rem;
+		font-size: 0.81rem;
 	}
 
 	.file-row {
@@ -343,13 +346,13 @@
 
 	.tree-header:hover,
 	.file-row:hover {
-		background: #2a2a2a;
+		background: rgba(255, 255, 255, 0.05);
 	}
 
 	.file-row.active {
-		background: rgba(74, 158, 255, 0.14);
-		color: #fff;
-		box-shadow: inset 3px 0 0 #4a9eff;
+		background: var(--accent-soft);
+		color: var(--text-primary);
+		box-shadow: inset 3px 0 0 var(--accent);
 	}
 
 	.depth-0 { padding-left: 0.55rem; }
@@ -358,7 +361,7 @@
 	.depth-3 { padding-left: 3.55rem; padding-right: 0.65rem; }
 
 	.twisty {
-		color: #a8a8a8;
+		color: var(--text-muted);
 		font-size: 0.72rem;
 	}
 
@@ -384,7 +387,7 @@
 
 	.node-detail,
 	.file-detail {
-		color: #9a9a9a;
+		color: var(--text-muted);
 		font-size: 0.72rem;
 	}
 </style>

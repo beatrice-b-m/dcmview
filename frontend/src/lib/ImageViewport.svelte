@@ -1803,7 +1803,9 @@ function startDisplayPrefetch(
 		position: relative;
 		display: grid;
 		place-items: center;
-		background: #111;
+		background:
+			radial-gradient(circle at center, rgba(255, 255, 255, 0.025), transparent 58%),
+			var(--surface-viewport);
 		min-height: 0;
 		overflow: hidden;
 		user-select: none;
@@ -1872,7 +1874,7 @@ function startDisplayPrefetch(
 	}
 	.placeholder,
 	.loading {
-		color: #9a9a9a;
+		color: var(--text-muted);
 	}
 	.loading {
 		position: absolute;
@@ -1880,6 +1882,11 @@ function startDisplayPrefetch(
 		left: 0.75rem;
 		font-size: 0.85rem;
 		z-index: 2;
+		padding: 0.3rem 0.5rem;
+		background: rgba(28, 28, 30, 0.72);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		backdrop-filter: blur(14px);
 	}
 	.overlay {
 		position: absolute;
@@ -1887,11 +1894,14 @@ function startDisplayPrefetch(
 		bottom: 0.75rem;
 		display: flex;
 		gap: 0.75rem;
-		font-size: 0.82rem;
-		padding: 0.3rem 0.5rem;
-		background: rgba(18, 18, 18, 0.75);
-		border: 1px solid #333;
-		border-radius: 4px;
+		font-size: 0.78rem;
+		padding: 0.34rem 0.55rem;
+		background: rgba(28, 28, 30, 0.74);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		box-shadow: var(--shadow-hud);
+		backdrop-filter: blur(16px);
+		color: var(--text-secondary);
 	}
 	.roi-list {
 		position: absolute;
@@ -1901,22 +1911,25 @@ function startDisplayPrefetch(
 		max-height: 38%;
 		overflow: auto;
 		font-size: 0.72rem;
-		padding: 0.45rem 0.5rem;
-		background: rgba(18, 18, 18, 0.82);
-		border: 1px solid #333;
-		border-radius: 6px;
+		padding: 0.5rem 0.55rem;
+		background: rgba(28, 28, 30, 0.78);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-panel);
+		box-shadow: var(--shadow-hud);
+		backdrop-filter: blur(16px);
 		z-index: 2;
+		scrollbar-width: thin;
 	}
 	.roi-list-title {
 		font-weight: 600;
 		margin-bottom: 0.25rem;
-		color: #c8ddff;
+		color: var(--text-primary);
 	}
 	.roi-list-status {
-		color: #a8a8a8;
+		color: var(--text-muted);
 	}
 	.roi-list-status.error {
-		color: #ff9c9c;
+		color: var(--danger);
 	}
 	.roi-list ul {
 		margin: 0;
@@ -1929,10 +1942,10 @@ function startDisplayPrefetch(
 		display: grid;
 		gap: 0.1rem;
 		padding: 0.18rem 0;
-		border-top: 1px dashed rgba(110, 110, 110, 0.5);
+		border-top: 1px solid rgba(255, 255, 255, 0.08);
 	}
 	.roi-list li.selected {
-		background: rgba(74, 158, 255, 0.12);
+		background: var(--accent-soft);
 		margin-inline: -0.25rem;
 		padding-inline: 0.25rem;
 		border-radius: 4px;
@@ -1949,15 +1962,20 @@ function startDisplayPrefetch(
 		padding: 0;
 		cursor: pointer;
 	}
+	.roi-select:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
+		border-radius: 3px;
+	}
 	.roi-id {
 		font-weight: 600;
 		color: #9fcbff;
 	}
 	.roi-coords,
 	.roi-frames {
-		font-family: ui-monospace, monospace;
+		font-family: var(--font-mono);
 		line-height: 1.25;
-		color: #d8d8d8;
+		color: var(--text-secondary);
 	}
 	.roi-actions {
 		display: flex;
@@ -1965,16 +1983,21 @@ function startDisplayPrefetch(
 		margin-top: 0.15rem;
 	}
 	.roi-actions button {
-		background: #1b1b1b;
-		border: 1px solid #3a3a3a;
-		border-radius: 4px;
-		color: #e0e0e0;
+		background: var(--surface-control);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		color: var(--text-secondary);
 		cursor: pointer;
 		font-size: 0.68rem;
 		padding: 0.15rem 0.35rem;
 	}
 	.roi-actions button:hover {
-		background: rgba(74, 158, 255, 0.15);
+		background: var(--surface-control-hover);
+		color: var(--text-primary);
+	}
+	.roi-actions button:focus-visible {
+		outline: none;
+		box-shadow: var(--focus-ring);
 	}
 	.roi-actions button.danger {
 		color: #ffb0b0;
@@ -1986,39 +2009,46 @@ function startDisplayPrefetch(
 		display: flex;
 		align-items: center;
 		gap: 0;
-		background: rgba(18, 18, 18, 0.85);
-		border: 1px solid #333;
-		border-radius: 6px;
+		background: rgba(28, 28, 30, 0.78);
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-panel);
 		overflow: hidden;
+		box-shadow: var(--shadow-hud);
+		backdrop-filter: blur(16px);
 	}
 	.zoom-controls button {
 		background: none;
 		border: none;
-		color: #e0e0e0;
+		color: var(--text-secondary);
 		padding: 0.3rem 0.55rem;
 		font-size: 0.95rem;
 		cursor: pointer;
 		line-height: 1;
 	}
 	.zoom-controls button:hover:not(:disabled) {
-		background: rgba(74, 158, 255, 0.15);
+		background: rgba(255, 255, 255, 0.08);
+		color: var(--text-primary);
+	}
+	.zoom-controls button:focus-visible {
+		outline: none;
+		box-shadow: inset var(--focus-ring);
 	}
 	.zoom-controls button:disabled {
-		color: #555;
+		color: rgba(255, 255, 255, 0.22);
 		cursor: default;
 	}
 	.zoom-controls .zoom-level {
 		padding: 0.3rem 0.4rem;
 		font-size: 0.78rem;
-		font-family: ui-monospace, monospace;
-		color: #ccc;
+		font-family: var(--font-mono);
+		color: var(--text-secondary);
 		min-width: 3.2rem;
 		text-align: center;
 		cursor: pointer;
-		border-left: 1px solid #333;
-		border-right: 1px solid #333;
+		border-left: 1px solid var(--border-subtle);
+		border-right: 1px solid var(--border-subtle);
 	}
 	.zoom-controls .zoom-level:hover {
-		color: #4a9eff;
+		color: var(--text-primary);
 	}
 </style>
