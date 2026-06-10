@@ -95,8 +95,7 @@ async fn monochrome1_display_png_matches_raw_renderer_inversion_semantics() {
     support::write_uncompressed_u16_dicom_with_photometric(
         &path,
         "1.2.840.10008.1.2.1",
-        2,
-        2,
+        (2, 2),
         vec![0, 1000, 2000, 3000],
         "MONOCHROME1",
         Some("1500"),
@@ -163,8 +162,7 @@ async fn monochrome1_inversion_preserves_default_and_full_dynamic_window_modes()
     support::write_uncompressed_u16_dicom_with_photometric(
         &path,
         "1.2.840.10008.1.2.1",
-        2,
-        2,
+        (2, 2),
         vec![0, 1000, 2000, 3000],
         "MONOCHROME1",
         Some("1500"),

@@ -150,8 +150,7 @@ pub fn write_uncompressed_u16_dicom(
     write_uncompressed_u16_dicom_with_photometric(
         path,
         transfer_syntax_uid,
-        rows,
-        columns,
+        (rows, columns),
         frames,
         "MONOCHROME2",
         window_center,
@@ -162,13 +161,13 @@ pub fn write_uncompressed_u16_dicom(
 pub fn write_uncompressed_u16_dicom_with_photometric(
     path: &Path,
     transfer_syntax_uid: &str,
-    rows: u16,
-    columns: u16,
+    dimensions: (u16, u16),
     frames: Vec<u16>,
     photometric_interpretation: &str,
     window_center: Option<&str>,
     window_width: Option<&str>,
 ) {
+    let (rows, columns) = dimensions;
     let pixels_per_frame = rows as usize * columns as usize;
     let frame_count = (frames.len() / pixels_per_frame).max(1) as u32;
 
