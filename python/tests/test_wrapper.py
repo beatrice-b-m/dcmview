@@ -169,6 +169,14 @@ class WrapperTests(unittest.TestCase):
 			verify_wheel.validate_wheel_archive(wheel, "win_amd64")
 			self.assertEqual(verify_wheel.resolve_wheel_path(Path(temp_dir), "win_amd64"), wheel.resolve())
 
+	def test_wheel_verifier_uses_absolute_windows_console_script_paths(self) -> None:
+		verify_wheel = _load_script_module("verify_wheel_install_for_console_test", VERIFY_WHEEL_INSTALL)
+		with mock.patch.object(verify_wheel, "os_name_is_windows", return_value=True):
+			self.assertEqual(
+				verify_wheel.console_script(Path("C:/venv/Scripts"), "dcmview"),
+				Path("C:/venv/Scripts/dcmview.exe"),
+			)
+
 	def test_tunnel_requires_host_before_spawn(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			with self.assertRaisesRegex(ValueError, "tunnel_host is required"):

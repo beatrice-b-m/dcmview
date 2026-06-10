@@ -28,6 +28,10 @@ def path_separator() -> str:
 	return ";" if os_name_is_windows() else ":"
 
 
+def console_script(bin_dir: pathlib.Path, name: str) -> pathlib.Path:
+	return bin_dir / (f"{name}.exe" if os_name_is_windows() else name)
+
+
 def expected_bundled_binary(expected_platform: str) -> str:
 	return (
 		"dcmview_py/bin/dcmview.exe"
@@ -92,8 +96,8 @@ def main() -> int:
 		}
 
 		run([str(python), "-m", "pip", "install", str(wheel_path)], env)
-		run(["dcmview", "--help"], env)
-		run(["dcmview-py", "--help"], env)
+		run([str(console_script(bin_dir, "dcmview")), "--help"], env)
+		run([str(console_script(bin_dir, "dcmview-py")), "--help"], env)
 		run([str(python), "-m", "dcmview_py", "--help"], env)
 
 	return 0
