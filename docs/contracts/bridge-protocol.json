@@ -1,0 +1,34 @@
+{
+  "auth": {
+    "bearerToken": "secret-token",
+    "legacyHeader": "X-Dcmview-Token"
+  },
+  "launch": {
+    "method": "POST",
+    "path": "/launch",
+    "request": {
+      "program": "dcmview_py",
+      "args": ["--no-browser", "--port", "0", "/workspace/scan.dcm"],
+      "cwd": "/workspace",
+      "wait": false
+    },
+    "response": {
+      "sessionId": "session-1",
+      "url": "http://127.0.0.1:51234"
+    }
+  },
+  "wait": {
+    "method": "GET",
+    "path": "/sessions/session-1/wait",
+    "response": {
+      "exitCode": 0
+    }
+  },
+  "stop": {
+    "method": "POST",
+    "path": "/sessions/session-1/stop",
+    "response": {
+      "ok": true
+    }
+  }
+}

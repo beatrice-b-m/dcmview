@@ -64,7 +64,7 @@ struct Cli {
     vscode_bridge_client: Option<Vec<String>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct BridgeLaunchRequest {
     program: String,
@@ -341,6 +341,39 @@ mod tests {
         assert_eq!(value["args"], serde_json::json!(["scan.dcm"]));
         assert_eq!(value["cwd"], "/workspace");
         assert_eq!(value["wait"], false);
+    }
+
+    #[test]
+    fn bridge_launch_request_matches_shared_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../docs/contracts/bridge-protocol.json"))
+                .expect("bridge fixture parses");
+        let request: BridgeLaunchRequest =
+            serde_json::from_value(fixture["launch"]["request"].clone())
+                .expect("launch request fixture parses");
+
+        let value = serde_json::to_value(request).expect("bridge launch request serializes");
+
+        assert_eq!(fixture["launch"]["method"], "POST");
+        assert_eq!(fixture["launch"]["path"], "/launch");
+        assert_eq!(value, fixture["launch"]["request"]);
+    }
+
+    #[test]
+    fn bridge_responses_parse_shared_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../docs/contracts/bridge-protocol.json"))
+                .expect("bridge fixture parses");
+
+        let launch: BridgeLaunchResponse =
+            serde_json::from_value(fixture["launch"]["response"].clone())
+                .expect("launch response fixture parses");
+        let wait: BridgeWaitResponse = serde_json::from_value(fixture["wait"]["response"].clone())
+            .expect("wait response fixture parses");
+
+        assert_eq!(launch.session_id, "session-1");
+        assert_eq!(launch.url, "http://127.0.0.1:51234");
+        assert_eq!(wait.exit_code, Some(0));
     }
 
     #[test]

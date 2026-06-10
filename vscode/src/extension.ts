@@ -8,7 +8,6 @@ import * as vscode from 'vscode';
 const STARTUP_PREFIX = 'dcmview: server running at ';
 const STARTUP_EVENT_TYPE = 'server_started';
 const BRIDGE_BYPASS_ENV = 'DCMVIEW_VSCODE_BYPASS';
-const BRIDGE_BINARY_ENV = 'DCMVIEW_VSCODE_BINARY';
 const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
 const BRIDGE_URL_ENV = 'DCMVIEW_VSCODE_BRIDGE_URL';
 
@@ -579,7 +578,6 @@ async function configureTerminalInterception(context: vscode.ExtensionContext): 
     env.prepend('PATH', `${shimDir}${path.delimiter}`);
     env.replace(BRIDGE_URL_ENV, bridge.url);
     env.replace(BRIDGE_TOKEN_ENV, bridge.token);
-    env.replace(BRIDGE_BINARY_ENV, binary);
     output.appendLine(`dcmview terminal interception enabled at ${bridge.url}`);
   } catch (error) {
     env.clear();
@@ -658,7 +656,7 @@ async function handleBridgeRequest(
         return;
       }
       await stopSession(session);
-      writeJson(response, 200, { ok: true });
+      writeJson(response, 200, bridgeStopResponse());
       return;
     }
 
@@ -670,7 +668,7 @@ async function handleBridgeRequest(
         return;
       }
       const exitCode = await session.exitCode;
-      writeJson(response, 200, { exitCode });
+      writeJson(response, 200, bridgeWaitResponse(exitCode));
       return;
     }
 
@@ -680,12 +678,23 @@ async function handleBridgeRequest(
   }
 }
 
-function isAuthorizedBridgeRequest(request: http.IncomingMessage, token: string): boolean {
+export function isAuthorizedBridgeRequest(
+  request: Pick<http.IncomingMessage, 'headers'>,
+  token: string,
+): boolean {
   const auth = request.headers.authorization;
   if (auth === `Bearer ${token}`) {
     return true;
   }
   return request.headers['x-dcmview-token'] === token;
+}
+
+export function bridgeStopResponse(): { ok: true } {
+  return { ok: true };
+}
+
+export function bridgeWaitResponse(exitCode: number): { exitCode: number } {
+  return { exitCode };
 }
 
 async function launchFromBridge(

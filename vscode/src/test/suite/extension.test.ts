@@ -1,9 +1,14 @@
 import * as assert from 'assert';
 import { EventEmitter } from 'events';
+import * as fs from 'fs';
+import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   binaryCandidates,
+  bridgeStopResponse,
+  bridgeWaitResponse,
   collectFileSystemPaths,
+  isAuthorizedBridgeRequest,
   normalizeInterceptedArgs,
   parseStartupLine,
   posixShim,
@@ -27,6 +32,9 @@ const output = {
   append: () => undefined,
   appendLine: () => undefined,
 };
+const bridgeContract = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../../../docs/contracts/bridge-protocol.json'), 'utf8'),
+);
 
 suite('dcmview extension', () => {
   test('parses structured startup events', () => {
@@ -117,6 +125,22 @@ suite('dcmview extension', () => {
     const windows = windowsShim('C:\\repo\\target\\debug\\dcmview.exe', 'dcmview');
     assert.ok(windows.includes('DCMVIEW_VSCODE_BYPASS'));
     assert.ok(windows.includes('--vscode-bridge-client dcmview'));
+  });
+
+  test('matches shared bridge auth and response fixture', () => {
+    const token = bridgeContract.auth.bearerToken;
+
+    assert.strictEqual(
+      isAuthorizedBridgeRequest({ headers: { authorization: `Bearer ${token}` } }, token),
+      true,
+    );
+    assert.strictEqual(
+      isAuthorizedBridgeRequest({ headers: { 'x-dcmview-token': token } }, token),
+      true,
+    );
+    assert.strictEqual(isAuthorizedBridgeRequest({ headers: { authorization: 'Bearer wrong' } }, token), false);
+    assert.deepStrictEqual(bridgeStopResponse(), bridgeContract.stop.response);
+    assert.deepStrictEqual(bridgeWaitResponse(bridgeContract.wait.response.exitCode), bridgeContract.wait.response);
   });
 
   test('registers public commands', async () => {

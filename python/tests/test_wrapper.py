@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import subprocess
 import sys
@@ -21,6 +22,7 @@ from dcmview_py import __main__ as dcmview_main
 from dcmview_py import wrapper
 
 FIXTURE_FILE = REPO_ROOT / "FFDM_R_MLO_ComboHD.dcm"
+BRIDGE_CONTRACT = REPO_ROOT / "docs" / "contracts" / "bridge-protocol.json"
 
 
 def _available_dcmview_binary() -> Optional[Path]:
@@ -275,6 +277,79 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(launch_payload["program"], "dcmview_py")
 		self.assertIn(str(FIXTURE_FILE), launch_payload["args"])
 		self.assertFalse(launch_payload["wait"])
+
+	def test_bridge_json_request_matches_shared_launch_fixture(self) -> None:
+		fixture = json.loads(BRIDGE_CONTRACT.read_text(encoding="utf-8"))
+		launch = fixture["launch"]
+		auth = fixture["auth"]
+		captured_request = None
+
+		class FakeResponse:
+			def __enter__(self) -> "FakeResponse":
+				return self
+
+			def __exit__(self, _exc_type, _exc, _tb) -> None:
+				return None
+
+			def read(self) -> bytes:
+				return json.dumps(launch["response"]).encode("utf-8")
+
+		def fake_urlopen(request, *, timeout):
+			nonlocal captured_request
+			captured_request = request
+			self.assertEqual(timeout, 5.0)
+			return FakeResponse()
+
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567/",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": auth["bearerToken"],
+			},
+			clear=True,
+		):
+			with mock.patch("dcmview_py.wrapper.urllib.request.urlopen", side_effect=fake_urlopen):
+				response = wrapper._bridge_json_request(
+					launch["method"],
+					launch["path"],
+					launch["request"],
+				)
+
+		self.assertEqual(response, launch["response"])
+		self.assertIsNotNone(captured_request)
+		assert captured_request is not None
+		self.assertEqual(captured_request.full_url, "http://127.0.0.1:4567/launch")
+		self.assertEqual(captured_request.get_method(), "POST")
+		self.assertEqual(captured_request.get_header("Authorization"), f"Bearer {auth['bearerToken']}")
+		self.assertEqual(captured_request.get_header("Content-type"), "application/json")
+		self.assertEqual(json.loads(captured_request.data.decode("utf-8")), launch["request"])
+
+	def test_bridge_json_request_parses_shared_wait_fixture(self) -> None:
+		fixture = json.loads(BRIDGE_CONTRACT.read_text(encoding="utf-8"))
+		wait = fixture["wait"]
+
+		class FakeResponse:
+			def __enter__(self) -> "FakeResponse":
+				return self
+
+			def __exit__(self, _exc_type, _exc, _tb) -> None:
+				return None
+
+			def read(self) -> bytes:
+				return json.dumps(wait["response"]).encode("utf-8")
+
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": fixture["auth"]["bearerToken"],
+			},
+			clear=True,
+		):
+			with mock.patch("dcmview_py.wrapper.urllib.request.urlopen", return_value=FakeResponse()):
+				response = wrapper._bridge_json_request(wait["method"], wait["path"])
+
+		self.assertEqual(response, wait["response"])
 
 	def test_view_returns_bridge_shutdown_handle_for_nonblocking_calls(self) -> None:
 		with mock.patch.dict(
