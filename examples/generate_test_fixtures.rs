@@ -13,9 +13,7 @@ fn main() {
 
     write_uncompressed_multiframe(&fixture_dir.join("golden-uncompressed-u16-multiframe.dcm"));
     write_jpeg_single_frame(&fixture_dir.join("golden-jpeg-baseline-single-frame.dcm"));
-    write_large_jpeg_single_frame(
-        &fixture_dir.join("golden-jpeg-baseline-large-single-frame.dcm"),
-    );
+    write_large_jpeg_single_frame(&fixture_dir.join("golden-jpeg-baseline-large-single-frame.dcm"));
     write_jpeg_multiframe_with_bot(&fixture_dir.join("golden-jpeg-baseline-multiframe-bot.dcm"));
     write_sr_without_pixels(&fixture_dir.join("golden-no-pixels-sr.dcm"));
 }
@@ -137,8 +135,7 @@ fn write_large_jpeg_single_frame(path: &Path) {
         DataElement::new(tags::WINDOW_WIDTH, VR::DS, PrimitiveValue::from("256")),
     ]);
 
-    let pixel_sequence: PixelFragmentSequence<Vec<u8>> =
-        vec![Fragments::new(fragment, 0)].into();
+    let pixel_sequence: PixelFragmentSequence<Vec<u8>> = vec![Fragments::new(fragment, 0)].into();
     obj.put(DataElement::new(tags::PIXEL_DATA, VR::OB, pixel_sequence));
 
     let file_object = obj
