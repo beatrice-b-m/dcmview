@@ -519,7 +519,6 @@ async function stopSession(session: RunningSession, disposePanel = true): Promis
   }
   session.stopped = true;
   sessions.delete(session);
-  sessionsById.delete(session.id);
   await terminateProcess(session.process, session.output, session.name);
   if (disposePanel) {
     session.panel.dispose();

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import os
+import json
 import shutil
 import signal
 import subprocess
 import sys
 import threading
+import urllib.error
+import urllib.request
 from pathlib import Path
 from typing import Iterable, Optional, Union
 
@@ -13,6 +16,9 @@ _STARTUP_PREFIX = "dcmview: server running at "
 _URL_WAIT_SECONDS = 5.0
 _STOP_TIMEOUT_SECONDS = 5.0
 _BINARY_ENV = "DCMVIEW_BINARY"
+_VSCODE_BRIDGE_URL_ENV = "DCMVIEW_VSCODE_BRIDGE_URL"
+_VSCODE_BRIDGE_TOKEN_ENV = "DCMVIEW_VSCODE_BRIDGE_TOKEN"
+_VSCODE_BRIDGE_BYPASS_ENV = "DCMVIEW_VSCODE_BYPASS"
 
 PathInput = Union[str, os.PathLike[str]]
 
@@ -104,6 +110,29 @@ class ShutdownHandle:
 		self.stop()
 
 
+class BridgeShutdownHandle:
+	"""Handle for controlling a VS Code-managed dcmview session."""
+
+	def __init__(self, session_id: str, url: str) -> None:
+		self._session_id = session_id
+		self._url = url
+
+	@property
+	def url(self) -> Optional[str]:
+		return self._url
+
+	def stop(self, timeout: float = _STOP_TIMEOUT_SECONDS) -> int:
+		_bridge_json_request("POST", f"/sessions/{self._session_id}/stop", timeout=timeout)
+		response = _bridge_json_request("GET", f"/sessions/{self._session_id}/wait", timeout=timeout)
+		return int(response.get("exitCode") or 0)
+
+	def __enter__(self) -> BridgeShutdownHandle:
+		return self
+
+	def __exit__(self, _exc_type, _exc, _tb) -> None:
+		self.stop()
+
+
 def view(
 	files: PathInput | Iterable[PathInput],
 	*,
@@ -117,11 +146,32 @@ def view(
 	recursive: bool = True,
 	timeout: Optional[int] = None,
 	annotations: Optional[PathInput] = None,
-) -> Optional[ShutdownHandle]:
+) -> Optional[ShutdownHandle | BridgeShutdownHandle]:
 	"""Launch dcmview for one or more filesystem paths."""
 
 	paths = _normalize_files(files)
 	annotation_path = _normalize_optional_path(annotations, field_name="annotations")
+	args = _build_args(
+		paths,
+		port=port,
+		host=host,
+		browser=browser,
+		tunnel=tunnel,
+		tunnel_host=tunnel_host,
+		tunnel_port=tunnel_port,
+		recursive=recursive,
+		timeout=timeout,
+		annotations=annotation_path,
+	)
+	if _bridge_available():
+		try:
+			return _view_via_vscode_bridge(args, block=block)
+		except (RuntimeError, OSError, urllib.error.URLError) as error:
+			print(
+				f"dcmview: VS Code bridge unavailable ({error}); falling back to local viewer",
+				file=sys.stderr,
+			)
+
 	command = _build_command(
 		paths,
 		port=port,
@@ -158,6 +208,35 @@ def view(
 		raise subprocess.CalledProcessError(int(process.returncode), command)
 
 	return ShutdownHandle(process, monitor)
+
+
+def _view_via_vscode_bridge(
+	args: list[str],
+	*,
+	block: bool,
+) -> Optional[BridgeShutdownHandle]:
+	response = _bridge_json_request(
+		"POST",
+		"/launch",
+		{
+			"program": "dcmview_py",
+			"args": args,
+			"cwd": os.getcwd(),
+			"wait": False,
+		},
+	)
+	session_id = str(response["sessionId"])
+	url = str(response["url"])
+	print(f"dcmview: opened in VS Code at {url}")
+
+	if not block:
+		return BridgeShutdownHandle(session_id, url)
+
+	wait_response = _bridge_json_request("GET", f"/sessions/{session_id}/wait")
+	exit_code = int(wait_response.get("exitCode") or 0)
+	if exit_code != 0:
+		raise subprocess.CalledProcessError(exit_code, ["dcmview-vscode-bridge", *args])
+	return None
 
 
 def _normalize_files(files: PathInput | Iterable[PathInput]) -> list[str]:
@@ -198,11 +277,40 @@ def _build_command(
 	timeout: Optional[int],
 	annotations: Optional[str],
 ) -> list[str]:
-	binary = _resolve_binary()
+	return [
+		_resolve_binary(),
+		*_build_args(
+			paths,
+			port=port,
+			host=host,
+			browser=browser,
+			tunnel=tunnel,
+			tunnel_host=tunnel_host,
+			tunnel_port=tunnel_port,
+			recursive=recursive,
+			timeout=timeout,
+			annotations=annotations,
+		),
+	]
+
+
+def _build_args(
+	paths: list[str],
+	*,
+	port: int,
+	host: str,
+	browser: bool,
+	tunnel: bool,
+	tunnel_host: Optional[str],
+	tunnel_port: int,
+	recursive: bool,
+	timeout: Optional[int],
+	annotations: Optional[str],
+) -> list[str]:
 	if tunnel and not tunnel_host:
 		raise ValueError("tunnel_host is required when tunnel=True")
 
-	command = [binary, "--port", str(port), "--host", host]
+	command = ["--port", str(port), "--host", host]
 	if not browser:
 		command.append("--no-browser")
 	if tunnel:
@@ -216,6 +324,37 @@ def _build_command(
 		command.extend(["--annotations", annotations])
 	command.extend(paths)
 	return command
+
+
+def _bridge_available() -> bool:
+	return (
+		os.environ.get(_VSCODE_BRIDGE_BYPASS_ENV) != "1"
+		and bool(os.environ.get(_VSCODE_BRIDGE_URL_ENV))
+		and bool(os.environ.get(_VSCODE_BRIDGE_TOKEN_ENV))
+	)
+
+
+def _bridge_json_request(
+	method: str,
+	path: str,
+	payload: Optional[dict[str, object]] = None,
+	*,
+	timeout: float = _STOP_TIMEOUT_SECONDS,
+) -> dict[str, object]:
+	base_url = os.environ[_VSCODE_BRIDGE_URL_ENV].rstrip("/")
+	token = os.environ[_VSCODE_BRIDGE_TOKEN_ENV]
+	body = None if payload is None else json.dumps(payload).encode("utf-8")
+	request = urllib.request.Request(
+		f"{base_url}{path}",
+		data=body,
+		method=method,
+		headers={
+			"Authorization": f"Bearer {token}",
+			"Content-Type": "application/json",
+		},
+	)
+	with urllib.request.urlopen(request, timeout=timeout) as response:
+		return json.loads(response.read().decode("utf-8"))
 
 
 def _resolve_binary() -> str:

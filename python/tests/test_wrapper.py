@@ -204,6 +204,86 @@ class WrapperTests(unittest.TestCase):
 		flag_index = command.index("--annotations")
 		self.assertEqual(command[flag_index + 1], "/tmp/annotations.csv")
 
+	def test_view_routes_blocking_calls_through_vscode_bridge(self) -> None:
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": "secret",
+			},
+			clear=True,
+		):
+			with mock.patch(
+				"dcmview_py.wrapper._bridge_json_request",
+				side_effect=[
+					{"sessionId": "abc", "url": "http://127.0.0.1:9999"},
+					{"exitCode": 0},
+				],
+			) as bridge_mock:
+				with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+					with redirect_stdout(StringIO()):
+						result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
+
+		self.assertIsNone(result)
+		popen_mock.assert_not_called()
+		launch_payload = bridge_mock.call_args_list[0].args[2]
+		self.assertEqual(launch_payload["program"], "dcmview_py")
+		self.assertIn(str(FIXTURE_FILE), launch_payload["args"])
+		self.assertFalse(launch_payload["wait"])
+
+	def test_view_returns_bridge_shutdown_handle_for_nonblocking_calls(self) -> None:
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": "secret",
+			},
+			clear=True,
+		):
+			with mock.patch(
+				"dcmview_py.wrapper._bridge_json_request",
+				side_effect=[
+					{"sessionId": "abc", "url": "http://127.0.0.1:9999"},
+					{"ok": True},
+					{"exitCode": 0},
+				],
+			) as bridge_mock:
+				with redirect_stdout(StringIO()):
+					handle = wrapper.view([FIXTURE_FILE], browser=False, block=False)
+				self.assertIsNotNone(handle)
+				assert handle is not None
+				self.assertEqual(handle.url, "http://127.0.0.1:9999")
+				self.assertEqual(handle.stop(), 0)
+
+		self.assertEqual(bridge_mock.call_args_list[1].args[:2], ("POST", "/sessions/abc/stop"))
+		self.assertEqual(bridge_mock.call_args_list[2].args[:2], ("GET", "/sessions/abc/wait"))
+
+	def test_vscode_bridge_bypass_uses_local_subprocess_path(self) -> None:
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": "secret",
+				"DCMVIEW_VSCODE_BYPASS": "1",
+			},
+			clear=True,
+		):
+			with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
+				command = wrapper._build_command(
+					["/tmp/scan.dcm"],
+					port=0,
+					host="127.0.0.1",
+					browser=True,
+					tunnel=False,
+					tunnel_host=None,
+					tunnel_port=0,
+					recursive=True,
+					timeout=None,
+					annotations=None,
+				)
+
+		self.assertEqual(command[0], "/tmp/dcmview")
+
 	def test_cli_returns_child_exit_code(self) -> None:
 		with mock.patch(
 			"dcmview_py.__main__.view",
