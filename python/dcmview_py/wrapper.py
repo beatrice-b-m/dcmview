@@ -101,8 +101,8 @@ class ShutdownHandle:
 			return int(self._process.returncode or 0)
 
 		try:
-			self._process.send_signal(signal.SIGINT)
-		except ProcessLookupError:
+			self._process.send_signal(_graceful_stop_signal())
+		except (ProcessLookupError, ValueError):
 			self._monitor.join()
 			return int(self._process.returncode or 0)
 		try:
@@ -202,13 +202,7 @@ def view(
 			include_startup_json=include_startup_json,
 		)
 
-		process = subprocess.Popen(
-			command,
-			stdout=subprocess.PIPE,
-			stderr=subprocess.STDOUT,
-			text=True,
-			bufsize=1,
-		)
+		process = subprocess.Popen(command, **_popen_options())
 		monitor = _OutputMonitor(process)
 		monitor.start()
 
@@ -431,13 +425,12 @@ def _resolve_binary() -> str:
 			return str(candidate)
 		raise RuntimeError(f"{_BINARY_ENV} points to a missing file: {candidate}")
 
-	bundled_name = "dcmview.exe" if os.name == "nt" else "dcmview"
-	bundled = Path(__file__).resolve().parent / "bin" / bundled_name
+	bundled = Path(__file__).resolve().parent / "bin" / _binary_name()
 	if bundled.is_file():
 		_ensure_executable(bundled)
 		return str(bundled)
 
-	path_binary = shutil.which("dcmview")
+	path_binary = shutil.which(_binary_name())
 	if path_binary is not None:
 		return path_binary
 
@@ -446,8 +439,34 @@ def _resolve_binary() -> str:
 	)
 
 
+def _binary_name() -> str:
+	return "dcmview.exe" if _is_windows() else "dcmview"
+
+
+def _is_windows() -> bool:
+	return os.name == "nt"
+
+
+def _popen_options() -> dict[str, object]:
+	options: dict[str, object] = {
+		"stdout": subprocess.PIPE,
+		"stderr": subprocess.STDOUT,
+		"text": True,
+		"bufsize": 1,
+	}
+	if _is_windows():
+		options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+	return options
+
+
+def _graceful_stop_signal() -> signal.Signals | int:
+	if _is_windows():
+		return getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+	return signal.SIGINT
+
+
 def _ensure_executable(path: Path) -> None:
-	if os.name == "nt" or os.access(path, os.X_OK):
+	if _is_windows() or os.access(path, os.X_OK):
 		return
 
 	mode = path.stat().st_mode

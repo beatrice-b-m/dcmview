@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import signal
 import subprocess
 import sys
@@ -66,6 +67,28 @@ def expect(condition: bool, message: str) -> None:
 		raise AssertionError(message)
 
 
+def is_windows() -> bool:
+	return os.name == "nt"
+
+
+def popen_options() -> dict[str, object]:
+	options: dict[str, object] = {
+		"stdout": subprocess.PIPE,
+		"stderr": subprocess.STDOUT,
+		"text": True,
+		"bufsize": 1,
+	}
+	if is_windows():
+		options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+	return options
+
+
+def graceful_stop_signal() -> signal.Signals | int:
+	if is_windows():
+		return getattr(signal, "CTRL_BREAK_EVENT", signal.SIGTERM)
+	return signal.SIGINT
+
+
 def main() -> int:
 	if len(sys.argv) != 4:
 		print(
@@ -87,10 +110,7 @@ def main() -> int:
 			str(pixel_fixture),
 			str(no_pixel_fixture),
 		],
-		stdout=subprocess.PIPE,
-		stderr=subprocess.STDOUT,
-		text=True,
-		bufsize=1,
+		**popen_options(),
 	)
 	monitor = OutputMonitor(process)
 	monitor.start()
@@ -127,8 +147,8 @@ def main() -> int:
 		return 0
 	finally:
 		try:
-			process.send_signal(signal.SIGINT)
-		except ProcessLookupError:
+			process.send_signal(graceful_stop_signal())
+		except (ProcessLookupError, ValueError):
 			pass
 		try:
 			process.wait(timeout=10)

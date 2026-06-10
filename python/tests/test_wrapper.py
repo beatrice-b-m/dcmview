@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import os
+import importlib.util
 import json
 import shutil
 import subprocess
 import sys
 import time
+import tempfile
 import unittest
+import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
 from pathlib import Path
@@ -23,17 +26,27 @@ from dcmview_py import wrapper
 
 FIXTURE_FILE = REPO_ROOT / "FFDM_R_MLO_ComboHD.dcm"
 BRIDGE_CONTRACT = REPO_ROOT / "docs" / "contracts" / "bridge-protocol.json"
+VERIFY_WHEEL_INSTALL = REPO_ROOT / "scripts" / "verify_wheel_install.py"
+
+
+def _load_script_module(name: str, path: Path):
+	spec = importlib.util.spec_from_file_location(name, path)
+	assert spec is not None
+	module = importlib.util.module_from_spec(spec)
+	assert spec.loader is not None
+	spec.loader.exec_module(module)
+	return module
 
 
 def _available_dcmview_binary() -> Optional[Path]:
 	for candidate in [
-		REPO_ROOT / "target" / "debug" / "dcmview",
-		REPO_ROOT / "target" / "release" / "dcmview",
+		REPO_ROOT / "target" / "debug" / wrapper._binary_name(),
+		REPO_ROOT / "target" / "release" / wrapper._binary_name(),
 	]:
 		if candidate.is_file():
 			return candidate
 
-	resolved = shutil.which("dcmview")
+	resolved = shutil.which(wrapper._binary_name())
 	if resolved is None:
 		return None
 	return Path(resolved)
@@ -93,11 +106,67 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(resolved, str(bundled))
 		ensure_mock.assert_called_once()
 
+	def test_prefers_windows_bundled_exe_before_path_lookup(self) -> None:
+		bundled = (PYTHON_SRC / "dcmview_py" / "bin" / "dcmview.exe").resolve()
+		with mock.patch.dict(os.environ, {}, clear=True):
+			with mock.patch("dcmview_py.wrapper._is_windows", return_value=True):
+				with mock.patch.object(wrapper.Path, "is_file", return_value=True):
+					with mock.patch("dcmview_py.wrapper.shutil.which", return_value="C:\\Tools\\dcmview.exe"):
+						with mock.patch("dcmview_py.wrapper._ensure_executable") as ensure_mock:
+							resolved = wrapper._resolve_binary()
+
+		self.assertEqual(resolved, str(bundled))
+		ensure_mock.assert_called_once()
+
+	def test_windows_path_lookup_uses_exe_name(self) -> None:
+		with mock.patch.dict(os.environ, {}, clear=True):
+			with mock.patch("dcmview_py.wrapper._is_windows", return_value=True):
+				with mock.patch.object(wrapper.Path, "is_file", return_value=False):
+					with mock.patch("dcmview_py.wrapper.shutil.which", return_value="C:\\Tools\\dcmview.exe") as which_mock:
+						resolved = wrapper._resolve_binary()
+
+		self.assertEqual(resolved, "C:\\Tools\\dcmview.exe")
+		which_mock.assert_called_once_with("dcmview.exe")
+
 	def test_missing_explicit_binary_env_var_raises(self) -> None:
 		with mock.patch.dict(os.environ, {"DCMVIEW_BINARY": "/tmp/missing-dcmview"}, clear=True):
 			with mock.patch.object(wrapper.Path, "is_file", return_value=False):
 				with self.assertRaisesRegex(RuntimeError, "points to a missing file"):
 					wrapper._resolve_binary()
+
+	def test_windows_subprocess_launch_uses_new_process_group(self) -> None:
+		with mock.patch("dcmview_py.wrapper._is_windows", return_value=True):
+			with mock.patch.object(wrapper.subprocess, "CREATE_NEW_PROCESS_GROUP", 512, create=True):
+				options = wrapper._popen_options()
+
+		self.assertEqual(options["creationflags"], 512)
+
+	def test_windows_shutdown_uses_ctrl_break_event(self) -> None:
+		process = mock.Mock()
+		process.poll.return_value = None
+		process.wait.return_value = 0
+		monitor = mock.Mock()
+
+		with mock.patch("dcmview_py.wrapper._is_windows", return_value=True):
+			with mock.patch.object(wrapper.signal, "CTRL_BREAK_EVENT", 123, create=True):
+				handle = wrapper.ShutdownHandle(process, monitor)
+				self.assertEqual(handle.stop(), 0)
+
+		process.send_signal.assert_called_once_with(123)
+		monitor.join.assert_called_once()
+
+	def test_wheel_verifier_accepts_windows_bundled_exe(self) -> None:
+		verify_wheel = _load_script_module("verify_wheel_install_for_test", VERIFY_WHEEL_INSTALL)
+		with tempfile.TemporaryDirectory(prefix="dcmview-wheel-test-") as temp_dir:
+			wheel = Path(temp_dir) / "dcmview_py-0.2.2-py3-none-win_amd64.whl"
+			with zipfile.ZipFile(wheel, "w") as archive:
+				archive.writestr("dcmview_py/bin/dcmview.exe", b"binary")
+				archive.writestr(
+					"dcmview_py-0.2.2.dist-info/entry_points.txt",
+					"[console_scripts]\ndcmview = dcmview_py.__main__:main\ndcmview-py = dcmview_py.__main__:main\n",
+				)
+
+			verify_wheel.validate_wheel_archive(wheel, "win_amd64")
 
 	def test_tunnel_requires_host_before_spawn(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
