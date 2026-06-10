@@ -702,6 +702,15 @@ async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
         tokio::signal::ctrl_c().await.expect("ctrl+c handler");
     };
 
+    #[cfg(windows)]
+    let ctrl_break = async {
+        let mut signal = tokio::signal::windows::ctrl_break().expect("ctrl+break handler");
+        signal.recv().await;
+    };
+
+    #[cfg(not(windows))]
+    let ctrl_break = std::future::pending::<()>();
+
     #[cfg(unix)]
     let terminate = async {
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
@@ -715,6 +724,7 @@ async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
 
     tokio::select! {
         _ = ctrl_c => {},
+        _ = ctrl_break => {},
         _ = terminate => {},
     }
 

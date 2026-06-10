@@ -146,15 +146,26 @@ def main() -> int:
 		expect(status == 404, f"no-pixel fixture should return 404, got {status}")
 		return 0
 	finally:
+		graceful_signal_sent = False
+		if process.poll() is None:
+			try:
+				process.send_signal(graceful_stop_signal())
+				graceful_signal_sent = True
+			except (ProcessLookupError, ValueError):
+				pass
 		try:
-			process.send_signal(graceful_stop_signal())
-		except (ProcessLookupError, ValueError):
-			pass
-		try:
-			process.wait(timeout=10)
+			return_code = process.wait(timeout=10)
+			if graceful_signal_sent:
+				expect(return_code == 0, f"graceful shutdown returned exit code {return_code}")
 		except subprocess.TimeoutExpired:
-			process.kill()
-			process.wait(timeout=10)
+			process.terminate()
+			try:
+				process.wait(timeout=5)
+			except subprocess.TimeoutExpired:
+				process.kill()
+				process.wait(timeout=10)
+			if graceful_signal_sent:
+				raise RuntimeError("dcmview did not exit after graceful shutdown signal")
 		monitor.join()
 
 

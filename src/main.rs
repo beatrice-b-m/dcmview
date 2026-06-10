@@ -249,11 +249,28 @@ async fn run_vscode_bridge_client(values: Vec<String>) -> Result<i32> {
         bridge_url.trim_end_matches('/'),
         launch_response.session_id
     );
+    let ctrl_c = tokio::signal::ctrl_c();
+
+    #[cfg(windows)]
+    let ctrl_break = async {
+        let mut signal =
+            tokio::signal::windows::ctrl_break().context("failed to listen for Ctrl+Break")?;
+        signal.recv().await;
+        Ok::<(), anyhow::Error>(())
+    };
+
+    #[cfg(not(windows))]
+    let ctrl_break = std::future::pending::<Result<()>>();
 
     tokio::select! {
         wait_result = wait_for_vscode_session(&client, &wait_url, &token) => wait_result,
-        signal_result = tokio::signal::ctrl_c() => {
+        signal_result = ctrl_c => {
             signal_result.context("failed to listen for Ctrl+C")?;
+            let _ = client.post(stop_url).bearer_auth(&token).send().await;
+            Ok(130)
+        },
+        signal_result = ctrl_break => {
+            signal_result?;
             let _ = client.post(stop_url).bearer_auth(&token).send().await;
             Ok(130)
         }
