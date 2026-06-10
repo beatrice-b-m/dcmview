@@ -424,8 +424,8 @@
 		grid-template-columns: 1.1rem 3.35rem minmax(0, 1fr);
 		align-items: start;
 		gap: 0.35rem;
-		padding-top: 0.36rem;
-		padding-bottom: 0.36rem;
+		padding-top: 0.28rem;
+		padding-bottom: 0.28rem;
 		font-size: 0.81rem;
 	}
 
@@ -434,8 +434,8 @@
 		grid-template-columns: 3.35rem minmax(0, 1fr);
 		align-items: start;
 		gap: 0.35rem;
-		padding-top: 0.34rem;
-		padding-bottom: 0.34rem;
+		padding-top: 0.26rem;
+		padding-bottom: 0.26rem;
 		font-size: 0.8rem;
 	}
 
@@ -456,14 +456,15 @@
 	.depth-3 { padding-left: 3.55rem; padding-right: 0.65rem; }
 
 	.twisty {
+		align-self: center;
 		color: var(--text-muted);
 		font-size: 0.72rem;
 		line-height: 1.35;
-		padding-top: 0.08rem;
 	}
 
 	.kind-badge {
 		display: block;
+		align-self: center;
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
@@ -485,7 +486,7 @@
 
 	.node-text {
 		display: grid;
-		gap: 0.08rem;
+		gap: 0.04rem;
 		line-height: 1.25;
 	}
 
