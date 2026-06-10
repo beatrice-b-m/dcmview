@@ -7,6 +7,8 @@
     "dev": "vite dev",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "generate:types": "python3 ../scripts/generate_frontend_types.py",
+    "check:types": "python3 ../scripts/generate_frontend_types.py --check",
     "preview": "vite preview"
   },
   "devDependencies": {

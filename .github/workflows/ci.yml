@@ -44,6 +44,12 @@ jobs:
         with:
           components: rustfmt
       - uses: Swatinem/rust-cache@v2
+      - name: Install frontend dependencies
+        run: npm --prefix frontend ci
+      - name: Check generated frontend API types
+        run: npm --prefix frontend run check:types
+      - name: Typecheck frontend
+        run: npm --prefix frontend run typecheck
       - name: Check Rust formatting
         run: cargo fmt --all -- --check
       - name: Regenerate committed fixtures

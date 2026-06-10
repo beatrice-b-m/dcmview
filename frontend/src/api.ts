@@ -1,68 +1,21 @@
-export type WindowMode = 'default' | 'full_dynamic';
+import type { FilesResponse, FrameInfo, TagNode, WindowMode } from "./generated/api-types";
 
-export interface WindowPreset {
-	center: number;
-	width: number;
-}
-
-export interface FileSummary {
-	index: number;
-	path: string;
-	label: string;
-	patient_id: string;
-	patient_name: string;
-	study_instance_uid: string;
-	study_date: string;
-	study_description: string;
-	series_instance_uid: string;
-	series_number: string;
-	series_description: string;
-	modality: string;
-	instance_number: string;
-	sop_instance_uid: string;
-	has_pixels: boolean;
-	frame_count: number;
-	rows: number;
-	columns: number;
-	transfer_syntax_uid: string;
-	default_window: WindowPreset | null;
-}
-
-export interface FilesResponse {
-	files: FileSummary[];
-	tunnelled: boolean;
-	tunnel_host: string | null;
-	server_start_ms: number;
-}
-
-export interface FrameInfo {
-	frame_count: number;
-	rows: number;
-	columns: number;
-	transfer_syntax: string;
-	has_pixels: boolean;
-	default_window: WindowPreset | null;
-}
+export type {
+	ErrorResponse,
+	FileSummary,
+	FilesResponse,
+	FrameInfo,
+	RawFrameMetadata as RawFrameMetadataContract,
+	TagNode,
+	TagValue,
+	WindowMode,
+	WindowPreset,
+} from "./generated/api-types";
 
 export interface EmbedRoiAnnotations {
 	num_roi: number;
 	roi_coords: [number, number, number, number][];
 	roi_frames: number[][];
-}
-
-export type TagValue =
-	| { type: "string"; value: string }
-	| { type: "number"; value: number }
-	| { type: "numbers"; value: number[]; truncated?: boolean; total?: number }
-	| { type: "binary"; length: number }
-	| { type: "sequence"; items: TagNode[][]; truncated?: boolean; total?: number }
-	| { type: "error"; message: string };
-
-export interface TagNode {
-	tag: string;
-	vr: string;
-	keyword: string;
-	value: TagValue;
 }
 
 async function readServerError(response: Response): Promise<string | null> {
@@ -191,6 +144,57 @@ export interface RawFrame {
 	buffer: ArrayBuffer;
 }
 
+function requiredHeader(headers: Headers, name: string): string {
+	const value = headers.get(name);
+	if (value === null || value.trim() === "") {
+		throw new Error(`raw frame response missing required header ${name}`);
+	}
+	return value;
+}
+
+function parseRequiredIntHeader(headers: Headers, name: string): number {
+	const value = Number.parseInt(requiredHeader(headers, name), 10);
+	if (!Number.isFinite(value)) {
+		throw new Error(`raw frame response has invalid integer header ${name}`);
+	}
+	return value;
+}
+
+function parseRequiredFloatHeader(headers: Headers, name: string): number {
+	const value = Number.parseFloat(requiredHeader(headers, name));
+	if (!Number.isFinite(value)) {
+		throw new Error(`raw frame response has invalid numeric header ${name}`);
+	}
+	return value;
+}
+
+function parseOptionalFloatHeader(headers: Headers, name: string): number | null {
+	const raw = headers.get(name);
+	if (raw === null || raw.trim() === "") {
+		return null;
+	}
+	const value = Number.parseFloat(raw);
+	if (!Number.isFinite(value)) {
+		throw new Error(`raw frame response has invalid numeric header ${name}`);
+	}
+	return value;
+}
+
+export function parseRawFrameMetadata(headers: Headers): RawFrameMetadata {
+	return {
+		rows: parseRequiredIntHeader(headers, 'X-Frame-Rows'),
+		columns: parseRequiredIntHeader(headers, 'X-Frame-Columns'),
+		bitsAllocated: parseRequiredIntHeader(headers, 'X-Frame-Bits-Allocated'),
+		pixelRepresentation: parseRequiredIntHeader(headers, 'X-Frame-Pixel-Representation'),
+		samplesPerPixel: parseRequiredIntHeader(headers, 'X-Frame-Samples-Per-Pixel'),
+		photometricInterpretation: requiredHeader(headers, 'X-Frame-Photometric-Interpretation'),
+		rescaleSlope: parseRequiredFloatHeader(headers, 'X-Frame-Rescale-Slope'),
+		rescaleIntercept: parseRequiredFloatHeader(headers, 'X-Frame-Rescale-Intercept'),
+		defaultWc: parseOptionalFloatHeader(headers, 'X-Frame-Default-Wc'),
+		defaultWw: parseOptionalFloatHeader(headers, 'X-Frame-Default-Ww'),
+	};
+}
+
 export async function fetchRawFrame(
 	fileIndex: number,
 	frame: number,
@@ -201,18 +205,5 @@ export async function fetchRawFrame(
 		throw await responseError(response, "raw frame fetch failed");
 	}
 	const buffer = await response.arrayBuffer();
-	const h = (name: string) => response.headers.get(name);
-	const metadata: RawFrameMetadata = {
-		rows: parseInt(h('X-Frame-Rows') ?? '0', 10),
-		columns: parseInt(h('X-Frame-Columns') ?? '0', 10),
-		bitsAllocated: parseInt(h('X-Frame-Bits-Allocated') ?? '8', 10),
-		pixelRepresentation: parseInt(h('X-Frame-Pixel-Representation') ?? '0', 10),
-		samplesPerPixel: parseInt(h('X-Frame-Samples-Per-Pixel') ?? '1', 10),
-		photometricInterpretation: h('X-Frame-Photometric-Interpretation') ?? 'MONOCHROME2',
-		rescaleSlope: parseFloat(h('X-Frame-Rescale-Slope') ?? '1'),
-		rescaleIntercept: parseFloat(h('X-Frame-Rescale-Intercept') ?? '0'),
-		defaultWc: h('X-Frame-Default-Wc') !== null ? parseFloat(h('X-Frame-Default-Wc')!) : null,
-		defaultWw: h('X-Frame-Default-Ww') !== null ? parseFloat(h('X-Frame-Default-Ww')!) : null,
-	};
-	return { metadata, buffer };
+	return { metadata: parseRawFrameMetadata(response.headers), buffer };
 }
