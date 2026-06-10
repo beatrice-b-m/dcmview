@@ -144,7 +144,7 @@ suite('dcmview extension', () => {
   });
 
   test('registers public commands', async () => {
-    const extension = vscode.extensions.getExtension('dcmview.dcmview-vscode');
+    const extension = vscode.extensions.getExtension('beatricebm.dcmview');
     assert.ok(extension, 'development extension should be available');
     await extension.activate();
 

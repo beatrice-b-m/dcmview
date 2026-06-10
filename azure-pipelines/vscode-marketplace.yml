@@ -1,0 +1,61 @@
+trigger:
+  tags:
+    include:
+      - v*
+
+pr: none
+
+variables:
+  githubRepository: beatrice-b-m/dcmview
+  serviceConnection: dcmview-marketplace-publisher
+  marketplaceEnvironment: vscode-marketplace
+
+stages:
+  - stage: PublishVSCode
+    displayName: Publish VS Code Marketplace extension
+    jobs:
+      - deployment: Publish
+        displayName: Publish target-specific VSIX artifacts
+        environment: $(marketplaceEnvironment)
+        pool:
+          vmImage: ubuntu-latest
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - task: NodeTool@0
+                  displayName: Use Node.js 20
+                  inputs:
+                    versionSpec: "20.x"
+
+                - script: |
+                    set -euo pipefail
+                    version="${BUILD_SOURCEBRANCHNAME#v}"
+                    python3 scripts/download_github_release_assets.py \
+                      --repo "$(githubRepository)" \
+                      --tag "$BUILD_SOURCEBRANCHNAME" \
+                      --output-dir marketplace-dist \
+                      --required "dcmview-${version}-linux-x64.vsix" \
+                      --required "dcmview-${version}-darwin-x64.vsix" \
+                      --required "dcmview-${version}-darwin-arm64.vsix"
+                  displayName: Download GitHub Release VSIX artifacts
+
+                - script: npm --prefix vscode ci
+                  displayName: Install VS Code extension publisher dependencies
+
+                - task: AzureCLI@2
+                  displayName: Publish VSIX artifacts with Microsoft Entra ID
+                  inputs:
+                    azureSubscription: $(serviceConnection)
+                    scriptType: bash
+                    scriptLocation: inlineScript
+                    inlineScript: |
+                      set -euo pipefail
+                      package_dir="$PWD/marketplace-dist"
+                      npm --prefix vscode exec -- vsce verify-pat beatricebm --azure-credential
+                      npm --prefix vscode exec -- vsce publish \
+                        --azure-credential \
+                        --packagePath "$package_dir"/*.vsix \
+                        --skip-duplicate

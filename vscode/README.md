@@ -1,9 +1,52 @@
-# dcmview VS Code extension
+# dcmview
 
-Closed-test builds bundle `dcmview` binaries for Linux x64, macOS x64, and
-macOS arm64. Set `dcmview.binaryPath` to an absolute binary path when testing an
-unsupported platform or overriding the bundled binary.
+Open local DICOM files and folders in `dcmview` directly from VS Code.
+
+`dcmview` is a fast, temporary DICOM inspection tool for research and
+development workflows. The extension starts a local loopback `dcmview` server
+from the selected file or folder and displays the viewer in a VS Code webview.
+
+`dcmview` is intended for developer and research inspection, not clinical
+diagnosis.
+
+## Supported Platforms
+
+Marketplace builds currently bundle `dcmview` binaries for:
+
+- Linux x64
+- macOS x64
+- macOS arm64
+
+Windows and other platforms are not published yet. On unsupported platforms, or
+when you need to test a locally built binary, set `dcmview.binaryPath` to an
+absolute path to a compatible `dcmview` executable.
+
+## Usage
 
 Use the Explorer context menu command `Open with dcmview` on DICOM files or
-folders. The extension starts a local loopback server and shows it in a VS Code
-webview.
+folders. The extension launches `dcmview --no-browser --port 0`, waits for the
+local server URL, and opens the viewer beside your current editor.
+
+The command `dcmview: Open Workspace with dcmview` opens a selected workspace
+folder. The command `dcmview: Stop All dcmview Sessions` terminates extension
+managed viewer sessions.
+
+When `dcmview.terminalInterception.enabled` is true, new integrated terminals
+route `dcmview`, `dcmview-py`, and `python -m dcmview_py` invocations into VS
+Code webview panels. Set `DCMVIEW_VSCODE_BYPASS=1` in a terminal to bypass that
+integration for a single shell session.
+
+## Settings
+
+- `dcmview.binaryPath`: absolute path to a `dcmview` binary override.
+- `dcmview.defaultRecursive`: recursively scan selected folders by default.
+- `dcmview.extraArgs`: additional command-line arguments passed to `dcmview`.
+- `dcmview.startupTimeoutSeconds`: seconds to wait for startup.
+- `dcmview.terminalInterception.enabled`: route integrated terminal launches
+  into VS Code webviews.
+
+## Marketplace Assets
+
+This listing intentionally ships without a custom icon for the initial
+Marketplace release. A PNG icon and screenshots should be added before broader
+promotion.

@@ -148,7 +148,7 @@ jobs:
           path: artifacts
       - name: Install VS Code extension dependencies
         run: npm --prefix vscode ci
-      - name: Package universal VSIX
+      - name: Package target-specific VSIX artifacts
         run: npm --prefix vscode run package:release
       - uses: actions/upload-artifact@v4
         with:

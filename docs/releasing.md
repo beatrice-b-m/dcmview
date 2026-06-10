@@ -4,13 +4,15 @@ Release automation is split across two workflows:
 
 - `.github/workflows/ci.yml` runs Linux-only tests on pushes and pull requests
 - `.github/workflows/release.yml` builds tagged release artifacts for Linux and macOS
+- `azure-pipelines/vscode-marketplace.yml` publishes VS Code Marketplace
+  packages from GitHub Release assets
 
 ## Release channels
 
 - **GitHub Releases** are the canonical binary artifacts
 - **PyPI wheels** are the preferred Linux/server install path when `PUBLISH_PYPI=1`
-- **VSIX files** are built for closed VS Code extension testing and are attached
-  to GitHub Releases
+- **VSIX files** are target-specific Marketplace packages attached to GitHub
+  Releases and published by Azure Pipelines
 - **Homebrew** formula generation is always part of the release job, and tap publication is enabled when `HOMEBREW_TAP_REPOSITORY` is configured
 
 ## Required repository configuration
@@ -22,6 +24,17 @@ Optional release publishing is gated behind repository settings:
 - `HOMEBREW_TAP_TOKEN` is a token with push access to the tap repo
 
 For PyPI, prefer GitHub trusted publishing on the `pypi` environment. The workflow already requests `id-token: write`.
+
+VS Code Marketplace publishing is handled in Azure DevOps:
+
+- Azure DevOps organization: `beatricebm`
+- Azure DevOps project: `dcmview`
+- Visual Studio Marketplace publisher: `beatricebm`
+- Service connection: `dcmview-marketplace-publisher`
+- Approval environment: `vscode-marketplace`
+
+The Azure pipeline uses Microsoft Entra ID with workload identity federation and
+publishes only VSIX assets that already exist on the GitHub Release.
 
 ## Standard release flow
 
@@ -47,14 +60,16 @@ The release workflow will:
 - smoke test each built binary against the committed fixture corpus
 - validate the Linux release artifact on Ubuntu 22.04 and Ubuntu 24.04
 - build bundled `dcmview-py` wheels
-- stage Linux x64, macOS x64, and macOS arm64 binaries into
-  `vscode/resources/bin/**` and package one universal closed-test VSIX
+- package target-specific VSIX artifacts for Linux x64, macOS x64, and macOS
+  arm64
 - publish release tarballs and wheels to GitHub Releases
-- publish the VSIX to GitHub Releases for closed testing
+- publish the VSIX artifacts to GitHub Releases
 - render `packaging/homebrew/dcmview.rb`
 - optionally publish to PyPI and the configured tap repo
+- trigger the Azure pipeline, which waits for the GitHub Release VSIX assets and
+  publishes them to the VS Code Marketplace after `vscode-marketplace` approval
 
-## VS Code closed-test package
+## VS Code Marketplace packages
 
 The VSIX packaging job downloads the same platform archives produced by the
 release build matrix and runs:
@@ -64,13 +79,17 @@ npm --prefix vscode ci
 npm --prefix vscode run package:release
 ```
 
-`package:release` stages binaries into these extension paths before invoking
-`vsce package`:
+`package:release` builds these target-specific VSIX artifacts:
 
-- `vscode/resources/bin/linux-x64/dcmview`
-- `vscode/resources/bin/darwin-x64/dcmview`
-- `vscode/resources/bin/darwin-arm64/dcmview`
+- `dist/dcmview-<version>-linux-x64.vsix`
+- `dist/dcmview-<version>-darwin-x64.vsix`
+- `dist/dcmview-<version>-darwin-arm64.vsix`
 
-Closed testers install the attached `.vsix` with `Extensions: Install from
-VSIX...`. `dcmview.binaryPath` remains the override for unsupported platforms,
-local debug binaries, and troubleshooting bundled-binary issues.
+Each package contains exactly one bundled binary at
+`vscode/resources/bin/<target>/dcmview`. Windows and other platforms are not
+published yet. `dcmview.binaryPath` remains the override for unsupported
+platforms, local debug binaries, and troubleshooting bundled-binary issues.
+
+The Azure Marketplace pipeline is tag-triggered, but the publish deployment is
+bound to the `vscode-marketplace` environment. Its approval check provides the
+final manual gate without requiring a separate manually triggered release flow.

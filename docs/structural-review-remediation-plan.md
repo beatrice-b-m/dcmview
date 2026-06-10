@@ -54,8 +54,8 @@ main findings still reproduce.
   interpretation from metadata; the backend PNG path must be fixed to match.
 - Treat `types.rs` as the source of truth for API types, generate checked-in
   TypeScript types from it, and verify generated-file freshness in CI.
-- Package bundled platform binaries in a universal VSIX for broader closed
-  testing, while keeping `dcmview.binaryPath` and `PATH` as overrides/fallbacks.
+- Package bundled platform binaries in target-specific VSIX artifacts, while
+  keeping `dcmview.binaryPath` and `PATH` as overrides/fallbacks.
 - Make contracts explicit and tested where packages meet: pixel semantics,
   HTTP JSON and headers, startup output, CLI flags, and bridge wire messages.
 - Prefer small, independently verifiable changes. Each phase below can land in
@@ -163,32 +163,31 @@ Acceptance checks:
 - `npm --prefix vscode run compile`
 - `npm --prefix vscode test`
 
-## Phase 5: VS Code Extension Release Decision
+## Phase 5: VS Code Extension Marketplace Release
 
-Goal: package a VSIX suitable for broader closed testing without adding
-Marketplace publishing scope.
+Goal: package target-specific VSIX artifacts and publish them to the VS Code
+Marketplace from GitHub Release assets.
 
 Implementation steps:
 
 1. Add VSIX packaging scripts to `vscode/package.json`, using `vsce package`
-   with closed-test-friendly settings.
+   with target-specific Marketplace settings.
 2. Add `.vscodeignore` so the VSIX contains the compiled extension runtime,
-   package metadata, closed-testing docs, and bundled binaries, but excludes
+   package metadata, Marketplace docs, and bundled binaries, but excludes
    source, tests, transient build output, and package-manager caches.
-3. Populate `vscode/resources/bin/<platform>-<arch>/dcmview` from the existing
-   release binaries for the supported closed-test platforms:
+3. Populate one `vscode/resources/bin/<platform>-<arch>/dcmview` binary at a
+   time from the existing release binaries for the supported Marketplace
+   platforms:
    `linux-x64`, `darwin-x64`, and `darwin-arm64`.
-4. Package one universal VSIX for closed testing. This keeps install
-   instructions simple; revisit platform-specific VSIX artifacts only if size
-   or platform targeting becomes a practical problem.
+4. Package target-specific VSIX artifacts and verify each contains only its
+   matching platform binary.
 5. Keep `dcmview.binaryPath` as the first lookup override and `PATH` as the
    fallback after bundled binaries. Do not make the extension install or depend
    on `dcmview-py`/pip at runtime.
 6. Include `vscode/package.json` in version synchronization so the VSIX version
    tracks the Rust binary and Python package during releases.
-7. Document closed-test installation, update, and troubleshooting flow,
-   including the bundled-binary platforms and the `dcmview.binaryPath` escape
-   hatch.
+7. Document Marketplace publishing through Azure Pipelines, including the
+   bundled-binary platforms and the `dcmview.binaryPath` escape hatch.
 
 Acceptance checks:
 
@@ -196,7 +195,7 @@ Acceptance checks:
 - `npm --prefix vscode run compile`
 - `npm --prefix vscode test`
 - VSIX package contains compiled runtime files and the expected
-  `resources/bin/**` binaries
+  target-specific `resources/bin/**` binary
 - Updated docs in `docs/vscode-extension-local-testing.md` and `docs/releasing.md`
 
 ## Phase 6: Low-Risk Developer Workflow Hardening

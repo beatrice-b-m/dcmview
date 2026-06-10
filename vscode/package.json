@@ -1,11 +1,23 @@
 {
-  "name": "dcmview-vscode",
+  "name": "dcmview",
   "displayName": "dcmview",
   "description": "Open DICOM files and folders in dcmview from VS Code.",
-  "version": "0.2.0",
-  "private": true,
-  "publisher": "dcmview",
+  "version": "0.2.1",
+  "publisher": "beatricebm",
   "license": "MIT",
+  "homepage": "https://github.com/beatrice-b-m/dcmview",
+  "bugs": {
+    "url": "https://github.com/beatrice-b-m/dcmview/issues"
+  },
+  "qna": false,
+  "pricing": "Free",
+  "keywords": [
+    "dicom",
+    "medical-imaging",
+    "viewer",
+    "research",
+    "radiology"
+  ],
   "repository": {
     "type": "git",
     "url": "https://github.com/beatrice-b-m/dcmview.git"
@@ -58,7 +70,7 @@
         "dcmview.binaryPath": {
           "type": "string",
           "default": "",
-          "description": "Absolute path to the dcmview binary. When empty, the extension tries the repo debug binary, bundled closed-test binaries, and then PATH."
+          "description": "Absolute path to the dcmview binary. When empty, the extension tries the repo debug binary, bundled Marketplace binary for the current platform, and then PATH."
         },
         "dcmview.defaultRecursive": {
           "type": "boolean",
@@ -91,10 +103,9 @@
     "compile": "tsc -p .",
     "watch": "tsc -watch -p .",
     "test": "npm run compile && node ./out/test/runTest.js",
-    "stage:binaries": "python3 ../scripts/stage_vscode_binaries.py",
     "prepare:dist": "node -e \"require('fs').mkdirSync('../dist', { recursive: true })\"",
-    "package": "npm run prepare:dist && npm run compile && vsce package --no-dependencies --out ../dist/dcmview-vscode-${npm_package_version}.vsix",
-    "package:release": "npm run stage:binaries -- --artifacts-dir ../artifacts && npm run package"
+    "package": "npm run prepare:dist && npm run compile && vsce package --no-dependencies --out ../dist/dcmview-${npm_package_version}.vsix",
+    "package:release": "npm run prepare:dist && python3 ../scripts/package_vscode_targets.py --artifacts-dir ../artifacts --out-dir ../dist"
   },
   "devDependencies": {
     "@types/mocha": "^10.0.10",
