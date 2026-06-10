@@ -204,6 +204,51 @@ class WrapperTests(unittest.TestCase):
 		flag_index = command.index("--annotations")
 		self.assertEqual(command[flag_index + 1], "/tmp/annotations.csv")
 
+	def test_build_command_requests_structured_startup_event(self) -> None:
+		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
+			command = wrapper._build_command(
+				["/tmp/scan.dcm"],
+				port=0,
+				host="127.0.0.1",
+				browser=True,
+				tunnel=False,
+				tunnel_host=None,
+				tunnel_port=0,
+				recursive=True,
+				timeout=None,
+				annotations=None,
+			)
+
+		self.assertIn("--startup-json", command)
+		self.assertLess(command.index("--startup-json"), command.index("/tmp/scan.dcm"))
+
+	def test_parse_structured_startup_event(self) -> None:
+		url = wrapper._parse_startup_url(
+			'{"type":"server_started","url":"http://127.0.0.1:51234","host":"127.0.0.1","port":51234}'
+		)
+
+		self.assertEqual(url, "http://127.0.0.1:51234")
+
+	def test_parse_legacy_startup_line_as_fallback(self) -> None:
+		url = wrapper._parse_startup_url("dcmview: server running at http://127.0.0.1:51234")
+
+		self.assertEqual(url, "http://127.0.0.1:51234")
+
+	def test_parse_startup_url_ignores_malformed_json_lines(self) -> None:
+		self.assertIsNone(wrapper._parse_startup_url('{"type":"server_started",'))
+		self.assertIsNone(wrapper._parse_startup_url('{"type":"other","url":"http://127.0.0.1:1"}'))
+		self.assertIsNone(wrapper._parse_startup_url("dcmview: loaded 1 DICOM file"))
+
+	def test_output_monitor_wait_for_url_times_out_without_startup_line(self) -> None:
+		process = mock.Mock()
+		process.stdout = StringIO("dcmview: loaded 1 DICOM file\n")
+		monitor = wrapper._OutputMonitor(process)
+
+		with redirect_stdout(StringIO()):
+			monitor.start()
+			self.assertIsNone(monitor.wait_for_url(0.01))
+			monitor.join()
+
 	def test_view_routes_blocking_calls_through_vscode_bridge(self) -> None:
 		with mock.patch.dict(
 			os.environ,

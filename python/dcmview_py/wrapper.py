@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Iterable, Optional, Union
 
 _STARTUP_PREFIX = "dcmview: server running at "
+_STARTUP_EVENT_TYPE = "server_started"
 _URL_WAIT_SECONDS = 5.0
 _STOP_TIMEOUT_SECONDS = 5.0
 _BINARY_ENV = "DCMVIEW_BINARY"
@@ -62,8 +63,9 @@ class _OutputMonitor:
 			for line in stdout:
 				sys.stdout.write(line)
 				sys.stdout.flush()
-				if line.startswith(_STARTUP_PREFIX):
-					self._set_url(line[len(_STARTUP_PREFIX) :].strip())
+				url = _parse_startup_url(line)
+				if url is not None:
+					self._set_url(url)
 		finally:
 			stdout.close()
 			self._url_ready.set()
@@ -310,7 +312,7 @@ def _build_args(
 	if tunnel and not tunnel_host:
 		raise ValueError("tunnel_host is required when tunnel=True")
 
-	command = ["--port", str(port), "--host", host]
+	command = ["--port", str(port), "--host", host, "--startup-json"]
 	if not browser:
 		command.append("--no-browser")
 	if tunnel:
@@ -324,6 +326,28 @@ def _build_args(
 		command.extend(["--annotations", annotations])
 	command.extend(paths)
 	return command
+
+
+def _parse_startup_url(line: str) -> Optional[str]:
+	trimmed = line.strip()
+	if trimmed.startswith("{"):
+		try:
+			event = json.loads(trimmed)
+		except json.JSONDecodeError:
+			return None
+		if (
+			isinstance(event, dict)
+			and event.get("type") == _STARTUP_EVENT_TYPE
+			and isinstance(event.get("url"), str)
+			and event["url"]
+		):
+			return event["url"]
+		return None
+
+	if trimmed.startswith(_STARTUP_PREFIX):
+		url = trimmed[len(_STARTUP_PREFIX) :].strip()
+		return url or None
+	return None
 
 
 def _bridge_available() -> bool:
