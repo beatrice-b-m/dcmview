@@ -31,6 +31,15 @@ fn apply_window(samples: &[u16], center: f64, width: f64) -> Vec<u8> {
         .collect()
 }
 
+fn apply_window_f64(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
+    let low = center - width / 2.0;
+    let high = center + width / 2.0;
+    samples
+        .iter()
+        .map(|value| ((((value.clamp(low, high)) - low) / (high - low)) * 255.0).round() as u8)
+        .collect()
+}
+
 fn assert_pixels_close(actual: &[u8], expected: &[u8], tolerance: u8) {
     assert_eq!(
         actual.len(),
@@ -99,6 +108,19 @@ async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
     let report = loader::discover(&[path], DiscoverOptions { recursive: false })
         .await
         .expect("discover JPEG fixture");
+    let expected_samples = expected
+        .iter()
+        .map(|value| f64::from(*value))
+        .collect::<Vec<_>>();
+    let window = dcmview::pixels::resolve_window(
+        None,
+        None,
+        report.files[0].default_window,
+        &expected_samples,
+    )
+    .expect("JPEG fixture resolves fallback window");
+    let expected_windowed =
+        apply_window_f64(&expected_samples, window.center, window.width.max(1.0));
     let test_server = TestServer::new(server::router(support::app_state(report.files)));
 
     let response = test_server.get("/api/file/0/frame/0").await;
@@ -109,7 +131,7 @@ async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
             .to_luma8();
     assert_eq!(decoded.width(), 16);
     assert_eq!(decoded.height(), 16);
-    assert_pixels_close(&decoded.into_raw(), &expected, 1);
+    assert_pixels_close(&decoded.into_raw(), &expected_windowed, 2);
     assert_ne!(response.as_bytes().as_ref(), fragment.as_slice());
 }
 

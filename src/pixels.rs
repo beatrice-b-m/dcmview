@@ -287,15 +287,27 @@ pub async fn load_frame(
 
     let (body, content_type) = match syntax_class {
         TransferSyntaxClass::Jpeg => (
-            decode_frame_to_png(file.clone(), request.frame)
-                .await
-                .map_err(PixelError::frame_decode)?,
+            decode_compressed_frame_to_png(
+                file.clone(),
+                request.frame,
+                request.window_center,
+                request.window_width,
+                request.window_mode,
+            )
+            .await
+            .map_err(PixelError::frame_decode)?,
             "image/png",
         ),
         TransferSyntaxClass::JpegLossless => (
-            decode_frame_to_png(file.clone(), request.frame)
-                .await
-                .map_err(PixelError::frame_decode)?,
+            decode_compressed_frame_to_png(
+                file.clone(),
+                request.frame,
+                request.window_center,
+                request.window_width,
+                request.window_mode,
+            )
+            .await
+            .map_err(PixelError::frame_decode)?,
             "image/png",
         ),
         TransferSyntaxClass::Jpeg2000 => (
@@ -468,13 +480,33 @@ fn decode_jp2_fragment_to_png_blocking(
     Ok(Bytes::from(buffer.into_inner()))
 }
 
-async fn decode_frame_to_png(file: FileEntry, frame: u32) -> Result<Bytes> {
-    task::spawn_blocking(move || decode_frame_to_png_blocking(&file, frame))
-        .await
-        .context("jp2 fallback decode task failed")?
+async fn decode_compressed_frame_to_png(
+    file: FileEntry,
+    frame: u32,
+    requested_wc: Option<f64>,
+    requested_ww: Option<f64>,
+    window_mode: WindowMode,
+) -> Result<Bytes> {
+    task::spawn_blocking(move || {
+        decode_compressed_frame_to_png_blocking(
+            &file,
+            frame,
+            requested_wc,
+            requested_ww,
+            window_mode,
+        )
+    })
+    .await
+    .context("compressed decode task failed")?
 }
 
-fn decode_frame_to_png_blocking(file: &FileEntry, frame: u32) -> Result<Bytes> {
+fn decode_compressed_frame_to_png_blocking(
+    file: &FileEntry,
+    frame: u32,
+    requested_wc: Option<f64>,
+    requested_ww: Option<f64>,
+    window_mode: WindowMode,
+) -> Result<Bytes> {
     let obj = open_file(&file.path).with_context(|| {
         format!(
             "failed to open DICOM for decode fallback: {}",
@@ -487,20 +519,69 @@ fn decode_frame_to_png_blocking(file: &FileEntry, frame: u32) -> Result<Bytes> {
             obj.meta().transfer_syntax()
         )
     })?;
-    let mut image = decoded.to_dynamic_image(frame).with_context(|| {
+    let image = decoded.to_dynamic_image(frame).with_context(|| {
         format!(
             "unsupported transfer syntax: {}",
             obj.meta().transfer_syntax()
         )
     })?;
-    if is_monochrome1(&file.photometric_interpretation) {
-        image.invert();
-    }
 
+    encode_dynamic_image_as_windowed_png(file, image, requested_wc, requested_ww, window_mode)
+}
+
+fn encode_dynamic_image_as_windowed_png(
+    file: &FileEntry,
+    image: image::DynamicImage,
+    requested_wc: Option<f64>,
+    requested_ww: Option<f64>,
+    window_mode: WindowMode,
+) -> Result<Bytes> {
+    let rows = image.height();
+    let columns = image.width();
+    let raw_samples = match image {
+        image::DynamicImage::ImageLuma8(luma8) => luma8
+            .into_raw()
+            .into_iter()
+            .map(|value| value as f64)
+            .collect::<Vec<_>>(),
+        image::DynamicImage::ImageLuma16(luma16) => luma16
+            .into_raw()
+            .into_iter()
+            .map(|value| value as f64)
+            .collect::<Vec<_>>(),
+        other => other
+            .into_luma16()
+            .into_raw()
+            .into_iter()
+            .map(|value| value as f64)
+            .collect::<Vec<_>>(),
+    };
+
+    let rescaled = raw_samples
+        .into_iter()
+        .map(|value| value * file.rescale_slope + file.rescale_intercept)
+        .collect::<Vec<_>>();
+    let resolved_window = resolve_window_with_mode(
+        window_mode,
+        requested_wc,
+        requested_ww,
+        file.default_window,
+        &rescaled,
+    )
+    .ok_or_else(|| anyhow!("compressed decode failed: could not resolve window"))?;
+    let mut windowed = apply_window(
+        &rescaled,
+        resolved_window.center,
+        resolved_window.width.max(1.0),
+    );
+    apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
+
+    let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)
+        .ok_or_else(|| anyhow!("compressed decode failed: windowed buffer size mismatch"))?;
     let mut buffer = Cursor::new(Vec::<u8>::new());
-    image
+    image::DynamicImage::ImageLuma8(image)
         .write_to(&mut buffer, ImageFormat::Png)
-        .context("failed to encode PNG")?;
+        .context("compressed decode failed: png encoding failed")?;
     Ok(Bytes::from(buffer.into_inner()))
 }
 
