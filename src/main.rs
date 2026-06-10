@@ -325,6 +325,8 @@ fn print_load_summary(report: &types::LoadReport, input_paths: &[PathBuf]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use clap::CommandFactory;
+    use std::collections::HashSet;
 
     #[test]
     fn bridge_launch_request_serializes_camel_case_contract() {
@@ -341,6 +343,33 @@ mod tests {
         assert_eq!(value["args"], serde_json::json!(["scan.dcm"]));
         assert_eq!(value["cwd"], "/workspace");
         assert_eq!(value["wait"], false);
+    }
+
+    #[test]
+    fn launcher_cli_flags_exist_on_clap_contract() {
+        let command = Cli::command();
+        let flags = command
+            .get_arguments()
+            .filter_map(|argument| argument.get_long())
+            .collect::<HashSet<_>>();
+
+        for expected in [
+            "port",
+            "host",
+            "no-browser",
+            "tunnel",
+            "tunnel-host",
+            "tunnel-port",
+            "timeout",
+            "no-recursive",
+            "annotations",
+            "startup-json",
+        ] {
+            assert!(
+                flags.contains(expected),
+                "launcher-used CLI flag --{expected} must exist on Cli"
+            );
+        }
     }
 
     #[test]

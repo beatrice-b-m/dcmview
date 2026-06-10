@@ -251,6 +251,7 @@ Static frontend assets are served at `/` and `/assets/*`.
 
 | Method | Path | Description |
 |---|---|---|
+| GET | `/api/health` | Ready-state probe with file count and server start time |
 | GET | `/api/files` | File registry and server metadata |
 | GET | `/api/file/:index/info` | Frame metadata for one file |
 | GET | `/api/file/:index/frame/:frame` | Display frame; supported image transfer syntaxes return PNG |
@@ -260,7 +261,17 @@ Static frontend assets are served at `/` and `/assets/*`.
 | PUT | `/api/file/:index/annotations` | Replace in-memory ROI annotations for one file |
 | GET | `/api/annotations/export.csv` | Download current annotations as EMBED CSV |
 
-### Files
+### Health and Files
+
+`GET /api/health` returns:
+
+```json
+{
+  "status": "ok",
+  "file_count": 2,
+  "server_start_ms": 1714300000000
+}
+```
 
 `GET /api/files` returns:
 
@@ -365,9 +376,13 @@ Frontend:
 
 ```bash
 npm --prefix frontend ci
+dcmview --no-browser --host 127.0.0.1 --port 8888 tests/fixtures
 npm --prefix frontend run dev
 npm --prefix frontend run build
 ```
+
+The Vite dev server proxies `/api` to `http://127.0.0.1:8888`, so start a
+backend on that host and port before using the standalone frontend dev server.
 
 Backend:
 
@@ -397,6 +412,11 @@ Architecture summary:
   interactive rendering, LRU caches
 - Frontend: Svelte 5, Vite, TypeScript, embedded via `rust-embed`
 - Distribution: one executable with no runtime frontend assets
+
+Backend frame cache budgets are currently 256 MiB for display PNGs and 384 MiB
+for raw sample frames. The frontend also keeps active frame blobs, raw buffers,
+and rendered bitmaps in memory for responsiveness, so cache budget changes
+should consider total browser plus server memory pressure.
 
 ## License
 
