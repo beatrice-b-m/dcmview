@@ -92,7 +92,8 @@
     "watch": "tsc -watch -p .",
     "test": "npm run compile && node ./out/test/runTest.js",
     "stage:binaries": "python3 ../scripts/stage_vscode_binaries.py",
-    "package": "npm run compile && vsce package --no-dependencies --out ../dist/dcmview-vscode-${npm_package_version}.vsix",
+    "prepare:dist": "node -e \"require('fs').mkdirSync('../dist', { recursive: true })\"",
+    "package": "npm run prepare:dist && npm run compile && vsce package --no-dependencies --out ../dist/dcmview-vscode-${npm_package_version}.vsix",
     "package:release": "npm run stage:binaries -- --artifacts-dir ../artifacts && npm run package"
   },
   "devDependencies": {
