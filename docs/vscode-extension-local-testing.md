@@ -17,6 +17,11 @@ The extension resolves binaries in this order:
 2. `target/debug/dcmview` from this repository.
 3. `dcmview` on `PATH`.
 
+When `dcmview.terminalInterception.enabled` is true, the extension starts a
+private loopback bridge and prepends generated shims to new integrated
+terminals. Open a fresh terminal after the Extension Development Host starts so
+the terminal receives the bridge environment.
+
 ## Run in an Extension Development Host
 
 1. Open this repository in VS Code.
@@ -30,6 +35,34 @@ The extension resolves binaries in this order:
 Folder testing uses the same context menu action. Use `tests/fixtures/` to
 verify multi-file discovery.
 
+## Terminal interception testing
+
+In a fresh integrated terminal in the Extension Development Host:
+
+```bash
+dcmview tests/fixtures/golden-uncompressed-u16-multiframe.dcm
+python -m dcmview_py --no-browser tests/fixtures/golden-uncompressed-u16-multiframe.dcm
+dcmview-py --no-browser tests/fixtures/golden-uncompressed-u16-multiframe.dcm
+```
+
+Each command should open a `dcmview` webview panel instead of opening an
+external browser. Closing the panel should unblock the terminal command. Pressing
+Ctrl+C in the terminal should stop the extension-managed session.
+
+Python API calls inherit the same bridge when run from a fresh integrated
+terminal:
+
+```bash
+python - <<'PY'
+from dcmview_py import view
+with view(["tests/fixtures/golden-uncompressed-u16-multiframe.dcm"], block=False) as handle:
+    print(handle.url)
+PY
+```
+
+Set `DCMVIEW_VSCODE_BYPASS=1` in the terminal to run the normal local CLI or
+Python wrapper path without extension interception.
+
 ## Command testing checklist
 
 - `dcmview: Open with dcmview` opens selected files and folders.
@@ -40,6 +73,13 @@ verify multi-file discovery.
 - `dcmview.binaryPath` overrides the repo debug binary.
 - `dcmview.defaultRecursive=false` passes `--no-recursive`.
 - `dcmview.extraArgs` are appended before selected paths.
+- Fresh integrated terminal `dcmview ...` opens a webview panel and blocks until
+  the extension-managed session exits.
+- Fresh integrated terminal `python -m dcmview_py ...` and `dcmview-py ...` open
+  webview panels.
+- Python `dcmview_py.view(..., block=False)` returns a handle whose `stop()`
+  closes the extension-managed session.
+- `DCMVIEW_VSCODE_BYPASS=1` disables interception for the current command.
 
 ## Automated checks
 
