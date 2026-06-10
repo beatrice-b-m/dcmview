@@ -1133,8 +1133,8 @@ function startDisplayPrefetch(
 		const scale = Math.max(MIN_ZOOM, viewportSize.height / imageRows);
 		return {
 			scale,
-			tx: imageColumns * (1 - scale) / 2,
-			ty: imageRows * (1 - scale) / 2,
+			tx: (viewportSize.width - imageColumns * scale) / 2,
+			ty: (viewportSize.height - imageRows * scale) / 2,
 			fit: true,
 		};
 	}
@@ -1150,8 +1150,8 @@ function startDisplayPrefetch(
 		if (!viewportEl || imageColumns <= 0 || imageRows <= 0) return null;
 		const rect = viewportEl.getBoundingClientRect();
 		return {
-			left: rect.left + (rect.width - imageColumns) / 2,
-			top: rect.top + (rect.height - imageRows) / 2,
+			left: rect.left,
+			top: rect.top,
 		};
 	}
 
@@ -1817,7 +1817,9 @@ function startDisplayPrefetch(
 	.viewport[data-tool="annotate_rect"] { cursor: crosshair; }
 	.viewport.dragging { cursor: grabbing; }
 	.image-layer {
-		position: relative;
+		position: absolute;
+		left: 0;
+		top: 0;
 		transform-origin: 0 0;
 		transition: transform 0.03s linear;
 	}
