@@ -663,6 +663,18 @@ async function handleBridgeRequest(
       return;
     }
 
+    const waitMatch = /^\/sessions\/([^/]+)\/wait$/.exec(url.pathname);
+    if ((request.method === 'GET' || request.method === 'POST') && waitMatch) {
+      const session = sessionsById.get(waitMatch[1]);
+      if (!session) {
+        writeJson(response, 404, { error: 'session not found' });
+        return;
+      }
+      const exitCode = await session.exitCode;
+      writeJson(response, 200, { exitCode });
+      return;
+    }
+
     writeJson(response, 404, { error: 'not found' });
   } catch (error) {
     writeJson(response, 500, { error: formatError(error) });
