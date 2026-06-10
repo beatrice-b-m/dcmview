@@ -20,3 +20,5 @@ vscode/out/
 # python package files
 *.egg-info/
 __pycache__/
+
+.DS_Store
