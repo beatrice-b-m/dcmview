@@ -110,7 +110,7 @@
 	let displayPrefetchCtrl: AbortController | null = null;
 	let displayPrefetchSeedFrame: number | null = null;
 	let displayPrefetchScopeKey = "";
-	let rawFrameCache = new Map<number, RawFrame>();
+	let rawFrameCache = new Map<string, RawFrame>();
 	let rawCacheBytes = 0;
 	let displayFrameCache = new Map<string, DisplayFrameCacheEntry>();
 	let displayCacheBytes = 0;
@@ -415,8 +415,24 @@
 		ctx.clearRect(0, 0, canvasEl.width, canvasEl.height);
 	}
 
+	function invalidateWindowLevelRenders(): void {
+		wlRenderGeneration += 1;
+	}
+
 	function estimateRawFrameBytes(frame: RawFrame): number {
 		return frame.buffer.byteLength;
+	}
+
+	function rawFrameCacheKey(fileIndex: number, frameIndex: number): string {
+		return `${fileIndex}:${frameIndex}`;
+	}
+
+	function parseRawFrameCacheKey(key: string): { fileIndex: number; frameIndex: number } | null {
+		const [rawFileIndex, rawFrameIndex] = key.split(":");
+		const fileIndex = Number.parseInt(rawFileIndex ?? "", 10);
+		const frameIndex = Number.parseInt(rawFrameIndex ?? "", 10);
+		if (!Number.isFinite(fileIndex) || !Number.isFinite(frameIndex)) return null;
+		return { fileIndex, frameIndex };
 	}
 
 	function clearRawFrameCache(): void {
@@ -424,35 +440,46 @@
 		rawCacheBytes = 0;
 	}
 
-	function getCachedRawFrame(frameIndex: number): RawFrame | undefined {
-		const cached = rawFrameCache.get(frameIndex);
+	function getCachedRawFrame(fileIndex: number, frameIndex: number): RawFrame | undefined {
+		const key = rawFrameCacheKey(fileIndex, frameIndex);
+		const cached = rawFrameCache.get(key);
 		if (!cached) return undefined;
-		rawFrameCache.delete(frameIndex);
-		rawFrameCache.set(frameIndex, cached);
+		rawFrameCache.delete(key);
+		rawFrameCache.set(key, cached);
 		return cached;
 	}
 
-	function deleteCachedRawFrame(frameIndex: number): void {
-		const cached = rawFrameCache.get(frameIndex);
+	function deleteCachedRawFrame(fileIndex: number, frameIndex: number): void {
+		const key = rawFrameCacheKey(fileIndex, frameIndex);
+		deleteCachedRawFrameByKey(key);
+	}
+
+	function deleteCachedRawFrameByKey(key: string): void {
+		const cached = rawFrameCache.get(key);
 		if (!cached) return;
-		rawFrameCache.delete(frameIndex);
+		rawFrameCache.delete(key);
 		rawCacheBytes = Math.max(0, rawCacheBytes - estimateRawFrameBytes(cached));
 	}
 
-	function cacheRawFrame(frameIndex: number, frame: RawFrame): void {
+	function cacheRawFrame(fileIndex: number, frameIndex: number, frame: RawFrame): void {
 		const incoming = estimateRawFrameBytes(frame);
 		if (incoming > RAW_CACHE_BYTE_BUDGET) return;
 
-		deleteCachedRawFrame(frameIndex);
+		deleteCachedRawFrame(fileIndex, frameIndex);
 
 		while (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) {
-			const oldestKey = rawFrameCache.keys().next().value as number | undefined;
+			const oldestKey = rawFrameCache.keys().next().value as string | undefined;
 			if (oldestKey === undefined) break;
-			deleteCachedRawFrame(oldestKey);
+			const oldest = parseRawFrameCacheKey(oldestKey);
+			if (oldest === null) {
+				rawFrameCache.delete(oldestKey);
+				continue;
+			}
+			deleteCachedRawFrame(oldest.fileIndex, oldest.frameIndex);
 		}
 
 		if (rawCacheBytes + incoming > RAW_CACHE_BYTE_BUDGET) return;
-		rawFrameCache.set(frameIndex, frame);
+		rawFrameCache.set(rawFrameCacheKey(fileIndex, frameIndex), frame);
 		rawCacheBytes += incoming;
 	}
 
@@ -840,12 +867,21 @@
 		return 4;
 	}
 
-	function trimRawCacheToRing(centerFrame: number, totalFrames: number): void {
+	function trimRawCacheToRing(fileIndex: number, centerFrame: number, totalFrames: number): void {
 		const minFrame = Math.max(0, centerFrame - RAW_RING_RADIUS);
 		const maxFrame = Math.min(totalFrames - 1, centerFrame + RAW_RING_RADIUS);
-		for (const cachedFrame of [...rawFrameCache.keys()]) {
-			if (cachedFrame < minFrame || cachedFrame > maxFrame) {
-				deleteCachedRawFrame(cachedFrame);
+		for (const cachedKey of [...rawFrameCache.keys()]) {
+			const cached = parseRawFrameCacheKey(cachedKey);
+			if (cached === null) {
+				rawFrameCache.delete(cachedKey);
+				continue;
+			}
+			if (cached.fileIndex !== fileIndex) {
+				deleteCachedRawFrameByKey(cachedKey);
+				continue;
+			}
+			if (cached.frameIndex < minFrame || cached.frameIndex > maxFrame) {
+				deleteCachedRawFrameByKey(cachedKey);
 			}
 		}
 	}
@@ -862,25 +898,27 @@
 		direction: 1 | -1,
 		signal: AbortSignal,
 	): Promise<void> {
-		trimRawCacheToRing(centerFrame, totalFrames);
+		trimRawCacheToRing(fileIndex, centerFrame, totalFrames);
 		const targets = buildDirectionalFrameOrder(centerFrame, totalFrames, RAW_RING_RADIUS, direction);
 		for (let i = 0; i < targets.length && !signal.aborted; i += prefetchConcurrency) {
-			const batch = targets.slice(i, i + prefetchConcurrency).filter((frameIndex) => !rawFrameCache.has(frameIndex));
+			const batch = targets
+				.slice(i, i + prefetchConcurrency)
+				.filter((frameIndex) => !rawFrameCache.has(rawFrameCacheKey(fileIndex, frameIndex)));
 			if (batch.length === 0) continue;
 			await Promise.allSettled(
 				batch.map(async (frameIndex) => {
-					if (signal.aborted || rawFrameCache.has(frameIndex)) return;
+					if (signal.aborted || rawFrameCache.has(rawFrameCacheKey(fileIndex, frameIndex))) return;
 					try {
 						const rawFrame = await fetchRawFrame(fileIndex, frameIndex, signal);
 						if (validateRenderableRawFrame(rawFrame) !== null) return;
-						cacheRawFrame(frameIndex, rawFrame);
+						cacheRawFrame(fileIndex, frameIndex, rawFrame);
 					} catch {
 						// Ignore network/decode failures during prefetch.
 					}
 				}),
 			);
 		}
-		trimRawCacheToRing(centerFrame, totalFrames);
+		trimRawCacheToRing(fileIndex, centerFrame, totalFrames);
 	}
 
 	async function runDisplayPrefetch(
@@ -994,7 +1032,7 @@ function startDisplayPrefetch(
 		generation: number,
 		direction: 1 | -1,
 	): Promise<void> {
-		const cached = getCachedRawFrame(frameIndex);
+		const cached = getCachedRawFrame(fileIndex, frameIndex);
 		if (cached) {
 			currentRawFrame = cached;
 			loading = false;
@@ -1024,8 +1062,8 @@ function startDisplayPrefetch(
 				loadError = validationError;
 				return;
 			}
-			cacheRawFrame(frameIndex, rawFrame);
-			trimRawCacheToRing(frameIndex, activeFile.frame_count);
+			cacheRawFrame(fileIndex, frameIndex, rawFrame);
+			trimRawCacheToRing(fileIndex, frameIndex, activeFile.frame_count);
 			currentRawFrame = rawFrame;
 			loading = false;
 			loadError = null;
@@ -1230,6 +1268,7 @@ function startDisplayPrefetch(
 		const nextScope = String(activeFile.index);
 		if (nextScope === fileScopeKey) return;
 		fileScopeKey = nextScope;
+		invalidateWindowLevelRenders();
 		rawRequestCtrl?.abort();
 		rawPrefetchCtrl?.abort();
 		displayRequestCtrl?.abort();
@@ -1268,6 +1307,7 @@ function startDisplayPrefetch(
 			rawRequestCtrl = null;
 			rawPrefetchCtrl?.abort();
 			rawPrefetchCtrl = null;
+			invalidateWindowLevelRenders();
 			liveWindowCenter = null;
 			liveWindowWidth = null;
 		} else {
@@ -1358,6 +1398,7 @@ function startDisplayPrefetch(
 		if (resetCount === lastHandledResetCount) return;
 		lastHandledResetCount = resetCount;
 		if (resetCount === 0) return;
+		invalidateWindowLevelRenders();
 		fitActiveImageToViewport();
 		liveWindowCenter = null;
 		liveWindowWidth = null;
