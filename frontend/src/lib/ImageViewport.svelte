@@ -91,7 +91,6 @@
 	let viewportSize = $state({ width: 0, height: 0 });
 	let canvasEl: HTMLCanvasElement | undefined = $state();
 	let roiSvgEl: SVGSVGElement | undefined = $state();
-	let wheelAccum = $state(0);
 	let currentRawFrame = $state<RawFrame | null>(null);
 	let annotationsByFile = $state<Record<number, EmbedRoiAnnotations | undefined>>({});
 	let annotationErrorsByFile = $state<Record<number, string | null | undefined>>({});
@@ -143,8 +142,10 @@
 	const PREFETCH_RESEED_DISTANCE = 6;
 	let prefetchConcurrency = $state(PREFETCH_CONCURRENCY);
 	const FRAME_SCROLL_SPEED_FACTOR = 0.7;
-	const WHEEL_FRAME_THRESHOLD = 30 / FRAME_SCROLL_SPEED_FACTOR;
 	const DRAG_PIXELS_PER_FRAME = 10 / FRAME_SCROLL_SPEED_FACTOR;
+	const TRACKPAD_WHEEL_DELTA_THRESHOLD = 50;
+	const MOUSE_WHEEL_ZOOM_SENSITIVITY = 0.0025;
+	const PINCH_ZOOM_SENSITIVITY = 0.01;
 	const activeFile = $derived(files[activeFileIndex] ?? { frame_count: 0, default_window: null });
 	const activeTransform = $derived(activeFile ? transformsByFile[activeFile.index] ?? DEFAULT_TRANSFORM : DEFAULT_TRANSFORM);
 	const transformCss = $derived.by(() => {
@@ -1355,12 +1356,6 @@ function startDisplayPrefetch(
 		liveWindowCenter = null;
 		liveWindowWidth = null;
 		dragState = null;
-		wheelAccum = 0;
-	});
-
-	$effect(() => {
-		activeFileIndex;
-		wheelAccum = 0;
 	});
 
 	function zoomAt(newScale: number, clientX: number, clientY: number) {
@@ -1378,56 +1373,57 @@ function startDisplayPrefetch(
 		});
 	}
 
+	function wheelDeltaPixels(event: WheelEvent): { dx: number; dy: number } {
+		if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) {
+			return { dx: event.deltaX * 16, dy: event.deltaY * 16 };
+		}
+		if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) {
+			const page = viewportSize.height || window.innerHeight || 800;
+			return { dx: event.deltaX * page, dy: event.deltaY * page };
+		}
+		return { dx: event.deltaX, dy: event.deltaY };
+	}
+
+	function isLikelyTouchpadWheel(event: WheelEvent, dx: number, dy: number): boolean {
+		if (event.deltaMode !== WheelEvent.DOM_DELTA_PIXEL) return false;
+		return Math.abs(dx) > 0 || Math.abs(dy) < TRACKPAD_WHEEL_DELTA_THRESHOLD;
+	}
+
+	function zoomByWheelDelta(deltaY: number, clientX: number, clientY: number, sensitivity: number) {
+		if (deltaY === 0) return;
+		zoomAt(activeTransform.scale * Math.exp(-deltaY * sensitivity), clientX, clientY);
+	}
+
 	function onWheel(event: WheelEvent) {
 		if (!activeFile || !activeFile.has_pixels) return;
 		if (isViewportChromeTarget(event.target)) return;
 		event.preventDefault();
 
-		const isModifiedZoom = event.ctrlKey || event.metaKey;
-		if (isModifiedZoom) {
-			const delta = event.deltaMode === 0 ? -event.deltaY * 0.01 : event.deltaY < 0 ? 0.05 : -0.05;
-			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
+		const { dx, dy } = wheelDeltaPixels(event);
+		if (event.ctrlKey || event.metaKey) {
+			zoomByWheelDelta(dy, event.clientX, event.clientY, PINCH_ZOOM_SENSITIVITY);
 			return;
 		}
 
-		if (activeFile.frame_count > 1) {
-			if (event.deltaMode !== 0) {
-				if (event.deltaY > 0) currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
-				else if (event.deltaY < 0) currentFrame = Math.max(0, currentFrame - 1);
-			} else {
-				wheelAccum += event.deltaY;
-				const threshold = WHEEL_FRAME_THRESHOLD;
-				while (wheelAccum >= threshold) {
-					currentFrame = Math.min(activeFile.frame_count - 1, currentFrame + 1);
-					wheelAccum -= threshold;
-				}
-				while (wheelAccum <= -threshold) {
-					currentFrame = Math.max(0, currentFrame - 1);
-					wheelAccum += threshold;
-				}
-			}
-			return;
-		}
-
-		if (event.deltaMode !== 0) {
-			const delta = event.deltaY < 0 ? 0.05 : -0.05;
-			zoomAt(activeTransform.scale + delta, event.clientX, event.clientY);
-		} else {
+		if (isLikelyTouchpadWheel(event, dx, dy)) {
 			updateTransform(activeFile.index, {
 				...activeTransform,
-				tx: activeTransform.tx - event.deltaX,
-				ty: activeTransform.ty - event.deltaY,
+				tx: activeTransform.tx - dx,
+				ty: activeTransform.ty - dy,
 			});
+			return;
 		}
+
+		zoomByWheelDelta(dy, event.clientX, event.clientY, MOUSE_WHEEL_ZOOM_SENSITIVITY);
 	}
 
 	function onPointerDown(event: PointerEvent) {
 		if (!activeFile || !activeFile.has_pixels) return;
 		if (isViewportChromeTarget(event.target)) return;
-		(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 
 		if (event.button === 1) {
 			event.preventDefault();
+			(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
 			dragState = {
 				mode: "pan",
 				startX: event.clientX,
@@ -1440,18 +1436,11 @@ function startDisplayPrefetch(
 
 		if (event.button === 2) {
 			event.preventDefault();
-			dragState = {
-				mode: "zoom_drag",
-				startX: event.clientX,
-				startY: event.clientY,
-				baseScale: activeTransform.scale,
-				pivotX: event.clientX,
-				pivotY: event.clientY,
-			};
 			return;
 		}
 
 		if (event.button === 0) {
+			let nextDragState: DragState = null;
 			switch (activeTool) {
 				case "window_level": {
 					if (pipelineMode !== "diagnostic_wl" || !currentRawFrame) {
@@ -1465,7 +1454,7 @@ function startDisplayPrefetch(
 						windowWidth,
 						windowMode,
 					);
-					dragState = {
+					nextDragState = {
 						mode: "wl",
 						startX: event.clientX,
 						startY: event.clientY,
@@ -1477,7 +1466,7 @@ function startDisplayPrefetch(
 					break;
 				}
 				case "pan":
-					dragState = {
+					nextDragState = {
 						mode: "pan",
 						startX: event.clientX,
 						startY: event.clientY,
@@ -1486,7 +1475,7 @@ function startDisplayPrefetch(
 					};
 					break;
 				case "zoom":
-					dragState = {
+					nextDragState = {
 						mode: "zoom_drag",
 						startX: event.clientX,
 						startY: event.clientY,
@@ -1497,7 +1486,7 @@ function startDisplayPrefetch(
 					break;
 				case "scroll":
 					if (activeFile.frame_count > 1) {
-						dragState = {
+						nextDragState = {
 							mode: "scroll_drag",
 							startY: event.clientY,
 							baseFrame: currentFrame,
@@ -1513,15 +1502,20 @@ function startDisplayPrefetch(
 					if (hit) {
 						setSelectedRoi(hit.roi.index);
 						const original: RoiCoord = [hit.roi.ymin, hit.roi.xmin, hit.roi.ymax, hit.roi.xmax];
-						dragState = hit.handle
+						nextDragState = hit.handle
 							? { mode: "resize_roi", roiIndex: hit.roi.index, handle: hit.handle, original }
 							: { mode: "move_roi", roiIndex: hit.roi.index, start: point, original };
 						break;
 					}
 					setSelectedRoi(null);
-					dragState = { mode: "draw_roi", start: point, current: point };
+					nextDragState = { mode: "draw_roi", start: point, current: point };
 					break;
 				}
+			}
+			if (nextDragState) {
+				event.preventDefault();
+				(event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
+				dragState = nextDragState;
 			}
 		}
 	}
@@ -1597,7 +1591,10 @@ function startDisplayPrefetch(
 	}
 
 	function onPointerUp(event: PointerEvent) {
-		(event.currentTarget as HTMLElement).releasePointerCapture(event.pointerId);
+		const target = event.currentTarget as HTMLElement;
+		if (target.hasPointerCapture(event.pointerId)) {
+			target.releasePointerCapture(event.pointerId);
+		}
 		if (dragState?.mode === "wl" && liveWindowCenter !== null && liveWindowWidth !== null) {
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
@@ -1777,6 +1774,7 @@ function startDisplayPrefetch(
 		min-height: 0;
 		overflow: hidden;
 		user-select: none;
+		touch-action: none;
 	}
 	.viewport[data-tool="window_level"] { cursor: crosshair; }
 	.viewport[data-tool="pan"] { cursor: grab; }
