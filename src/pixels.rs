@@ -286,24 +286,23 @@ pub async fn load_frame(
 
     let (body, content_type) = match syntax_class {
         TransferSyntaxClass::Jpeg => (
-            decode_frame_to_png(file.path.clone(), request.frame)
+            decode_frame_to_png(file.clone(), request.frame)
                 .await
                 .map_err(PixelError::frame_decode)?,
             "image/png",
         ),
         TransferSyntaxClass::JpegLossless => (
-            decode_frame_to_png(file.path.clone(), request.frame)
+            decode_frame_to_png(file.clone(), request.frame)
                 .await
                 .map_err(PixelError::frame_decode)?,
             "image/png",
         ),
         TransferSyntaxClass::Jpeg2000 => (
             decode_jp2_fragment_to_png(
-                file.path.clone(),
+                file.clone(),
                 request.frame,
                 request.window_center,
                 request.window_width,
-                file.default_window,
                 request.window_mode,
             )
             .await
@@ -368,36 +367,27 @@ fn read_encapsulated_fragment_blocking(path: &PathBuf, frame: u32) -> Result<Byt
 }
 
 async fn decode_jp2_fragment_to_png(
-    path: PathBuf,
+    file: FileEntry,
     frame: u32,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
-    default_window: Option<crate::types::WindowPreset>,
     window_mode: WindowMode,
 ) -> Result<Bytes> {
     task::spawn_blocking(move || {
-        decode_jp2_fragment_to_png_blocking(
-            &path,
-            frame,
-            requested_wc,
-            requested_ww,
-            default_window,
-            window_mode,
-        )
+        decode_jp2_fragment_to_png_blocking(&file, frame, requested_wc, requested_ww, window_mode)
     })
     .await
     .context("jp2 fragment decode task failed")?
 }
 
 fn decode_jp2_fragment_to_png_blocking(
-    path: &PathBuf,
+    file: &FileEntry,
     frame: u32,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
-    default_window: Option<crate::types::WindowPreset>,
     window_mode: WindowMode,
 ) -> Result<Bytes> {
-    let fragment = read_encapsulated_fragment_blocking(path, frame)?;
+    let fragment = read_encapsulated_fragment_blocking(&file.path, frame)?;
 
     let jp2_image = jpeg2k::Image::from_bytes(&fragment)
         .map_err(anyhow::Error::from)
@@ -419,15 +409,16 @@ fn decode_jp2_fragment_to_png_blocking(
             window_mode,
             requested_wc,
             requested_ww,
-            default_window,
+            file.default_window,
             &raw_samples,
         )
         .ok_or_else(|| anyhow!("JP2 decode failed: could not resolve window"))?;
-        let windowed = apply_window(
+        let mut windowed = apply_window(
             &raw_samples,
             resolved_window.center,
             resolved_window.width.max(1.0),
         );
+        apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
         let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(width, height, windowed)
             .ok_or_else(|| anyhow!("JP2 decoded buffer size mismatch"))?;
         image::DynamicImage::ImageLuma8(image)
@@ -476,17 +467,17 @@ fn decode_jp2_fragment_to_png_blocking(
     Ok(Bytes::from(buffer.into_inner()))
 }
 
-async fn decode_frame_to_png(path: PathBuf, frame: u32) -> Result<Bytes> {
-    task::spawn_blocking(move || decode_frame_to_png_blocking(&path, frame))
+async fn decode_frame_to_png(file: FileEntry, frame: u32) -> Result<Bytes> {
+    task::spawn_blocking(move || decode_frame_to_png_blocking(&file, frame))
         .await
         .context("jp2 fallback decode task failed")?
 }
 
-fn decode_frame_to_png_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
-    let obj = open_file(path).with_context(|| {
+fn decode_frame_to_png_blocking(file: &FileEntry, frame: u32) -> Result<Bytes> {
+    let obj = open_file(&file.path).with_context(|| {
         format!(
             "failed to open DICOM for decode fallback: {}",
-            path.display()
+            file.path.display()
         )
     })?;
     let decoded = obj.decode_pixel_data().with_context(|| {
@@ -495,12 +486,15 @@ fn decode_frame_to_png_blocking(path: &PathBuf, frame: u32) -> Result<Bytes> {
             obj.meta().transfer_syntax()
         )
     })?;
-    let image = decoded.to_dynamic_image(frame).with_context(|| {
+    let mut image = decoded.to_dynamic_image(frame).with_context(|| {
         format!(
             "unsupported transfer syntax: {}",
             obj.meta().transfer_syntax()
         )
     })?;
+    if is_monochrome1(&file.photometric_interpretation) {
+        image.invert();
+    }
 
     let mut buffer = Cursor::new(Vec::<u8>::new());
     image
@@ -587,11 +581,12 @@ fn decode_uncompressed_to_png_blocking(
         &luminance_samples,
     )
     .ok_or_else(|| anyhow!("frame decode failed: could not resolve window"))?;
-    let windowed = apply_window(
+    let mut windowed = apply_window(
         &luminance_samples,
         resolved_window.center,
         resolved_window.width.max(1.0),
     );
+    apply_monochrome1_inversion(&mut windowed, &file.photometric_interpretation);
 
     let image = ImageBuffer::<Luma<u8>, Vec<u8>>::from_raw(columns, rows, windowed)
         .ok_or_else(|| anyhow!("frame decode failed: windowed buffer size mismatch"))?;
@@ -907,6 +902,20 @@ pub fn apply_window(samples: &[f64], center: f64, width: f64) -> Vec<u8> {
         .iter()
         .map(|sample| (((sample.clamp(low, high) - low) / (high - low)) * 255.0).round() as u8)
         .collect()
+}
+
+fn is_monochrome1(photometric_interpretation: &str) -> bool {
+    photometric_interpretation
+        .trim()
+        .eq_ignore_ascii_case("MONOCHROME1")
+}
+
+fn apply_monochrome1_inversion(samples: &mut [u8], photometric_interpretation: &str) {
+    if is_monochrome1(photometric_interpretation) {
+        for sample in samples {
+            *sample = 255_u8.saturating_sub(*sample);
+        }
+    }
 }
 
 #[cfg(test)]

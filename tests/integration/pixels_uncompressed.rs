@@ -1,5 +1,7 @@
 use super::support;
-use dcmview::pixels::{load_frame, new_cache, FrameRequest};
+use dcmview::pixels::{
+    load_frame, load_raw_frame, new_cache, new_raw_cache, FrameRequest, RawFrameRequest,
+};
 use dcmview::types::WindowPreset;
 use image::ImageFormat;
 use tempfile::tempdir;
@@ -84,6 +86,152 @@ async fn decodes_uncompressed_png_and_tracks_window_cache_keys() {
     .expect("window override frame");
     assert!(!overridden.cache_hit);
     assert_ne!(first.body.as_ref(), overridden.body.as_ref());
+}
+
+#[tokio::test]
+async fn monochrome1_display_png_matches_raw_renderer_inversion_semantics() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("monochrome1.dcm");
+    support::write_uncompressed_u16_dicom_with_photometric(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        "MONOCHROME1",
+        Some("1500"),
+        Some("3000"),
+    );
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+    entry.photometric_interpretation = "MONOCHROME1".to_string();
+    entry.default_window = Some(WindowPreset {
+        center: 1500.0,
+        width: 3000.0,
+    });
+
+    let files = vec![entry];
+    let display = load_frame(
+        &files,
+        new_cache(),
+        FrameRequest {
+            file_index: 0,
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+            accept_header: Some("image/png".to_string()),
+        },
+    )
+    .await
+    .expect("monochrome1 display frame");
+    let raw = load_raw_frame(
+        &files,
+        new_raw_cache(),
+        RawFrameRequest {
+            file_index: 0,
+            frame: 0,
+        },
+    )
+    .await
+    .expect("monochrome1 raw frame");
+
+    assert_eq!(raw.metadata.photometric_interpretation, "MONOCHROME1");
+    assert_eq!(
+        raw.body.as_ref(),
+        &[0, 0, 0xE8, 0x03, 0xD0, 0x07, 0xB8, 0x0B],
+        "raw transport must preserve source samples"
+    );
+
+    let image = image::load_from_memory_with_format(display.body.as_ref(), ImageFormat::Png)
+        .expect("valid monochrome1 png")
+        .to_luma8();
+    let pixels = image.into_raw();
+    assert_eq!(
+        pixels,
+        vec![255, 170, 85, 0],
+        "display PNG must apply MONOCHROME1 inversion after default windowing"
+    );
+}
+
+#[tokio::test]
+async fn monochrome1_inversion_preserves_default_and_full_dynamic_window_modes() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("monochrome1-window-modes.dcm");
+    support::write_uncompressed_u16_dicom_with_photometric(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        "MONOCHROME1",
+        Some("1500"),
+        Some("1000"),
+    );
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+    entry.photometric_interpretation = "MONOCHROME1".to_string();
+    entry.default_window = Some(WindowPreset {
+        center: 1500.0,
+        width: 1000.0,
+    });
+
+    let files = vec![entry];
+    let cache = new_cache();
+    let default = load_frame(
+        &files,
+        cache.clone(),
+        FrameRequest {
+            file_index: 0,
+            frame: 0,
+            window_center: None,
+            window_width: None,
+            window_mode: dcmview::types::WindowMode::Default,
+            accept_header: Some("image/png".to_string()),
+        },
+    )
+    .await
+    .expect("monochrome1 default window");
+    let dynamic = load_frame(
+        &files,
+        cache,
+        FrameRequest {
+            file_index: 0,
+            frame: 0,
+            window_center: Some(42.0),
+            window_width: Some(42.0),
+            window_mode: dcmview::types::WindowMode::FullDynamic,
+            accept_header: Some("image/png".to_string()),
+        },
+    )
+    .await
+    .expect("monochrome1 full dynamic window");
+
+    let default_pixels =
+        image::load_from_memory_with_format(default.body.as_ref(), ImageFormat::Png)
+            .expect("valid default png")
+            .to_luma8()
+            .into_raw();
+    let dynamic_pixels =
+        image::load_from_memory_with_format(dynamic.body.as_ref(), ImageFormat::Png)
+            .expect("valid dynamic png")
+            .to_luma8()
+            .into_raw();
+
+    assert_eq!(
+        default_pixels,
+        vec![255, 255, 0, 0],
+        "default mode must still use the DICOM window before inversion"
+    );
+    assert_eq!(
+        dynamic_pixels,
+        vec![255, 170, 85, 0],
+        "full_dynamic mode must ignore explicit/default windows before inversion"
+    );
 }
 
 #[tokio::test]
