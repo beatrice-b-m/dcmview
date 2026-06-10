@@ -2,7 +2,7 @@
   "name": "dcmview",
   "displayName": "dcmview",
   "description": "Open DICOM files and folders in dcmview from VS Code.",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "publisher": "beatricebm",
   "license": "MIT",
   "homepage": "https://github.com/beatrice-b-m/dcmview",

@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.2
+
+- Add Windows 11 x64 release artifacts across GitHub Releases, PyPI wheels, and
+  target-specific VSIX packages.
+- Bundle and resolve `dcmview.exe` for Windows Python and VS Code installs.
+- Add Windows CI and release validation coverage for the committed fixture
+  smoke test.
+
 ## 0.2.1
 
 - Publish target-specific VSIX packages for Linux x64, macOS x64, and macOS
