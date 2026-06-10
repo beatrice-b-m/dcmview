@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from "svelte";
-	import { annotationsExportUrl, fetchFiles, type FilesResponse, type WindowMode } from "./api";
+	import { annotationsExportUrl, fetchFiles, type FilesResponse, type WindowMode, type WindowPreset } from "./api";
 	import FileNavigator from "./lib/FileNavigator.svelte";
 	import FrameSlider from "./lib/FrameSlider.svelte";
 	import ImageViewport from "./lib/ImageViewport.svelte";
@@ -28,6 +28,11 @@
 		currentFrame: number;
 	};
 
+	type ManualWindowAdjustment = {
+		centerOffsetRatio: number;
+		widthRatio: number;
+	};
+
 	let filesResponse = $state<FilesResponse | null>(null);
 	let loadError = $state<string | null>(null);
 
@@ -40,6 +45,8 @@
 	let windowMode = $state<WindowMode>('default');
 	let selectedPresetId = $state('default');
 	let lastAppliedPresetId = 'default';
+	let manualWindowAdjustment = $state<ManualWindowAdjustment | null>(null);
+	let lastWindowFileIndex = $state<number | null>(null);
 	let resetCount = $state(0);
 	let orientationByFile = $state<Record<number, ImageOrientation>>({});
 	let fileNavigatorCollapsed = $state(false);
@@ -122,6 +129,7 @@
 
 	function resetViewport() {
 		if (activeFileIndex === null) return;
+		manualWindowAdjustment = null;
 		windowCenter = null;
 		windowWidth = null;
 		windowMode = 'default';
@@ -214,7 +222,48 @@
 		sidebarResizeState = null;
 	}
 
+	function fileByIndex(fileIndex: number): FilesResponse["files"][number] | null {
+		return filesResponse?.files.find((file) => file.index === fileIndex) ?? null;
+	}
+
+	function defaultWindowForFile(fileIndex: number): WindowPreset | null {
+		const window = fileByIndex(fileIndex)?.default_window ?? null;
+		if (!window || !Number.isFinite(window.center) || !Number.isFinite(window.width) || window.width <= 0) {
+			return null;
+		}
+		return window;
+	}
+
+	function resolveManualWindowForFile(fileIndex: number): WindowPreset | null {
+		if (!manualWindowAdjustment) return null;
+		const base = defaultWindowForFile(fileIndex);
+		if (!base) return null;
+		return {
+			center: base.center + manualWindowAdjustment.centerOffsetRatio * base.width,
+			width: Math.max(1, manualWindowAdjustment.widthRatio * base.width),
+		};
+	}
+
+	function recordManualWindowLevel(center: number, width: number) {
+		if (activeFileIndex === null || !Number.isFinite(center) || !Number.isFinite(width) || width <= 0) {
+			return;
+		}
+		const base = defaultWindowForFile(activeFileIndex);
+		if (!base) {
+			manualWindowAdjustment = null;
+			return;
+		}
+		manualWindowAdjustment = {
+			centerOffsetRatio: (center - base.center) / base.width,
+			widthRatio: width / base.width,
+		};
+		windowMode = 'default';
+		selectedPresetId = 'default';
+		lastAppliedPresetId = 'default';
+	}
+
 	function applyWindowPreset(presetId: string) {
+		manualWindowAdjustment = null;
 		const preset = WL_PRESETS.find(p => p.id === presetId);
 		if (!preset) return;
 		if (preset.wc !== undefined && preset.ww !== undefined) {
@@ -233,6 +282,18 @@
 		if (presetId === lastAppliedPresetId) return;
 		lastAppliedPresetId = presetId;
 		applyWindowPreset(presetId);
+	});
+
+	$effect(() => {
+		const fileIndex = activeFileIndex;
+		if (fileIndex === lastWindowFileIndex) return;
+		lastWindowFileIndex = fileIndex;
+		if (fileIndex === null || !manualWindowAdjustment) return;
+		const resolved = resolveManualWindowForFile(fileIndex);
+		if (!resolved) return;
+		windowCenter = resolved.center;
+		windowWidth = resolved.width;
+		windowMode = 'default';
 	});
 
 	$effect(() => {
@@ -316,6 +377,7 @@
 						selectedPresetId={selectedPresetId}
 						orientation={activeOrientation}
 						onreset={resetViewport}
+						onmanualwindowlevel={recordManualWindowLevel}
 					/>
 					<FrameSlider
 						files={filesResponse.files}

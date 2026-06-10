@@ -519,48 +519,82 @@ fn decode_compressed_frame_to_png_blocking(
             obj.meta().transfer_syntax()
         )
     })?;
-    let image = decoded.to_dynamic_image(frame).with_context(|| {
-        format!(
-            "unsupported transfer syntax: {}",
-            obj.meta().transfer_syntax()
-        )
-    })?;
-
-    encode_dynamic_image_as_windowed_png(file, image, requested_wc, requested_ww, window_mode)
+    let (samples, rows, columns) = decoded_luminance_samples(file, &decoded, frame)?;
+    encode_windowed_luminance_png(
+        file,
+        samples,
+        rows,
+        columns,
+        requested_wc,
+        requested_ww,
+        window_mode,
+    )
 }
 
-fn encode_dynamic_image_as_windowed_png(
+fn decoded_luminance_samples(
     file: &FileEntry,
-    image: image::DynamicImage,
+    decoded: &dicom_pixeldata::DecodedPixelData<'_>,
+    frame: u32,
+) -> Result<(Vec<f64>, u32, u32)> {
+    let bits_allocated = decoded.bits_allocated() as u32;
+    let signed = file.pixel_representation == 1;
+    let samples_per_pixel = decoded.samples_per_pixel().max(1) as usize;
+    let raw_samples = match bits_allocated {
+        8 => decoded
+            .frame_data(frame)?
+            .iter()
+            .map(|value| {
+                if signed {
+                    (*value as i8) as f64
+                } else {
+                    *value as f64
+                }
+            })
+            .collect::<Vec<_>>(),
+        16 => decoded
+            .frame_data_ow(frame)?
+            .into_iter()
+            .map(|value| {
+                if signed {
+                    (value as i16) as f64
+                } else {
+                    value as f64
+                }
+            })
+            .collect::<Vec<_>>(),
+        _ => {
+            return Err(anyhow!(
+                "compressed decode failed: unsupported BitsAllocated {bits_allocated}"
+            ));
+        }
+    };
+
+    let luminance_samples = if samples_per_pixel == 1 {
+        raw_samples
+    } else {
+        raw_samples
+            .chunks(samples_per_pixel)
+            .map(|chunk| chunk[0])
+            .collect::<Vec<_>>()
+    };
+
+    let rescaled = luminance_samples
+        .into_iter()
+        .map(|value| value * file.rescale_slope + file.rescale_intercept)
+        .collect::<Vec<_>>();
+
+    Ok((rescaled, decoded.rows(), decoded.columns()))
+}
+
+fn encode_windowed_luminance_png(
+    file: &FileEntry,
+    rescaled: Vec<f64>,
+    rows: u32,
+    columns: u32,
     requested_wc: Option<f64>,
     requested_ww: Option<f64>,
     window_mode: WindowMode,
 ) -> Result<Bytes> {
-    let rows = image.height();
-    let columns = image.width();
-    let raw_samples = match image {
-        image::DynamicImage::ImageLuma8(luma8) => luma8
-            .into_raw()
-            .into_iter()
-            .map(|value| value as f64)
-            .collect::<Vec<_>>(),
-        image::DynamicImage::ImageLuma16(luma16) => luma16
-            .into_raw()
-            .into_iter()
-            .map(|value| value as f64)
-            .collect::<Vec<_>>(),
-        other => other
-            .into_luma16()
-            .into_raw()
-            .into_iter()
-            .map(|value| value as f64)
-            .collect::<Vec<_>>(),
-    };
-
-    let rescaled = raw_samples
-        .into_iter()
-        .map(|value| value * file.rescale_slope + file.rescale_intercept)
-        .collect::<Vec<_>>();
     let resolved_window = resolve_window_with_mode(
         window_mode,
         requested_wc,
@@ -817,37 +851,32 @@ fn decode_raw_jpeg_lossless_blocking(
             obj.meta().transfer_syntax()
         )
     })?;
-    let img = decoded.to_dynamic_image(frame).with_context(|| {
-        format!(
-            "unsupported transfer syntax: {}",
-            obj.meta().transfer_syntax()
-        )
-    })?;
+    if decoded.samples_per_pixel() != 1 {
+        return Err(anyhow!(
+            "raw JPEG Lossless decode failed: unsupported SamplesPerPixel {}",
+            decoded.samples_per_pixel()
+        ));
+    }
 
-    let (img_rows, img_columns) = (img.height(), img.width());
-
-    let (sample_bytes, bits_allocated) = match img {
-        image::DynamicImage::ImageLuma8(luma8) => {
-            let samples = luma8.into_raw();
-            (Bytes::from(samples), 8u32)
+    let bits_allocated = decoded.bits_allocated() as u32;
+    let sample_bytes = match bits_allocated {
+        8 => Bytes::copy_from_slice(decoded.frame_data(frame)?),
+        16 => {
+            let bytes = decoded
+                .frame_data_ow(frame)?
+                .into_iter()
+                .flat_map(|value| value.to_le_bytes())
+                .collect::<Vec<_>>();
+            Bytes::from(bytes)
         }
-        image::DynamicImage::ImageLuma16(luma16) => {
-            let bytes: Vec<u8> = luma16
-                .into_raw()
-                .iter()
-                .flat_map(|&v| v.to_le_bytes())
-                .collect();
-            (Bytes::from(bytes), 16u32)
-        }
-        other => {
-            // Convert non-grayscale to grayscale (luma8) as fallback
-            let luma8 = other.into_luma8();
-            let samples = luma8.into_raw();
-            (Bytes::from(samples), 8u32)
+        _ => {
+            return Err(anyhow!(
+                "raw JPEG Lossless decode failed: unsupported BitsAllocated {bits_allocated}"
+            ));
         }
     };
 
-    let metadata = file.raw_metadata(img_rows, img_columns, bits_allocated, 1);
+    let metadata = file.raw_metadata(decoded.rows(), decoded.columns(), bits_allocated, 1);
     Ok((sample_bytes, metadata))
 }
 

@@ -73,6 +73,7 @@
 		resetCount,
 		orientation = DEFAULT_ORIENTATION,
 		onreset,
+		onmanualwindowlevel,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number;
@@ -85,6 +86,7 @@
 		resetCount: number;
 		orientation?: ImageOrientation;
 		onreset?: () => void;
+		onmanualwindowlevel?: (center: number, width: number) => void;
 	} = $props();
 
 	let transformsByFile = $state<Record<number, TransformState>>({});
@@ -1672,6 +1674,7 @@ function startDisplayPrefetch(
 		if (dragState?.mode === "wl" && liveWindowCenter !== null && liveWindowWidth !== null) {
 			windowCenter = liveWindowCenter;
 			windowWidth = liveWindowWidth;
+			onmanualwindowlevel?.(liveWindowCenter, liveWindowWidth);
 		}
 		if (dragState?.mode === "draw_roi") {
 			const coord = canonicalRect(dragState.start, dragState.current, imageRows, imageColumns);
