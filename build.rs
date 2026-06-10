@@ -1,4 +1,5 @@
 use sha2::{Digest, Sha256};
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -22,7 +23,7 @@ fn main() {
         return;
     }
 
-    let node_bin = match resolve_tool_path("node", "DCMVIEW_NODE_PATH") {
+    let _node_bin = match resolve_tool_path("node", "DCMVIEW_NODE_PATH") {
         Ok(path) => path,
         Err(error) => fatal(&error),
     };
@@ -30,10 +31,6 @@ fn main() {
         Ok(path) => path,
         Err(error) => fatal(&error),
     };
-
-    if !tool_exists(&node_bin) || !tool_exists(&npm_bin) {
-        fatal("Node.js and npm are required to build dcmview");
-    }
 
     // Only run `npm ci` when package-lock.json content has changed since the last
     // successful install. Persist a SHA-256 digest in OUT_DIR.
@@ -120,7 +117,7 @@ fn lock_fingerprint() -> String {
 // npm helpers
 // ---------------------------------------------------------------------------
 
-fn resolve_tool_path(default_tool: &str, env_var: &str) -> Result<String, String> {
+fn resolve_tool_path(default_tool: &str, env_var: &str) -> Result<PathBuf, String> {
     if let Ok(raw) = std::env::var(env_var) {
         let configured = raw.trim();
         if configured.is_empty() {
@@ -130,12 +127,68 @@ fn resolve_tool_path(default_tool: &str, env_var: &str) -> Result<String, String
         if !candidate.is_absolute() {
             return Err(format!("{env_var} must be an absolute path when provided"));
         }
-        return Ok(candidate.to_string_lossy().to_string());
+        if !tool_runs(&candidate) {
+            return Err(format!(
+                "{env_var} points to a tool that could not be executed: {}",
+                candidate.display()
+            ));
+        }
+        return Ok(candidate);
     }
-    Ok(default_tool.to_string())
+
+    let candidate = find_runnable_tool_on_path(default_tool).ok_or_else(|| {
+        format!("Node.js and npm are required to build dcmview; missing {default_tool}")
+    })?;
+    Ok(candidate)
 }
 
-fn tool_exists(tool: &str) -> bool {
+fn find_runnable_tool_on_path(tool: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    let tool_path = Path::new(tool);
+    if tool_path.components().count() > 1 {
+        return candidate_names(tool)
+            .into_iter()
+            .map(PathBuf::from)
+            .find(|candidate| candidate.is_file() && tool_runs(candidate));
+    }
+
+    std::env::split_paths(&path)
+        .flat_map(|dir| {
+            candidate_names(tool)
+                .into_iter()
+                .map(move |name| dir.join(name))
+        })
+        .find(|candidate| candidate.is_file() && tool_runs(candidate))
+}
+
+fn candidate_names(tool: &str) -> Vec<OsString> {
+    let base = OsString::from(tool);
+    #[cfg(windows)]
+    {
+        let tool_path = Path::new(tool);
+        if tool_path.extension().is_some() {
+            return vec![base];
+        }
+        let pathext =
+            std::env::var_os("PATHEXT").unwrap_or_else(|| OsString::from(".COM;.EXE;.BAT;.CMD"));
+        let mut names = Vec::new();
+        names.push(base.clone());
+        for ext in std::env::split_paths(&pathext) {
+            let ext = ext.as_os_str().to_string_lossy();
+            if ext.is_empty() {
+                continue;
+            }
+            names.push(OsString::from(format!("{tool}{ext}")));
+        }
+        names
+    }
+    #[cfg(not(windows))]
+    {
+        vec![base]
+    }
+}
+
+fn tool_runs(tool: &Path) -> bool {
     Command::new(tool)
         .arg("--version")
         .output()
@@ -143,7 +196,7 @@ fn tool_exists(tool: &str) -> bool {
         .unwrap_or(false)
 }
 
-fn run_npm<'a>(npm_bin: &str, args: impl IntoIterator<Item = &'a str>) {
+fn run_npm<'a>(npm_bin: &Path, args: impl IntoIterator<Item = &'a str>) {
     let status = Command::new(npm_bin)
         .args(args)
         .current_dir("frontend")
