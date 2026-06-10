@@ -1,11 +1,11 @@
 import type { FilesResponse, FrameInfo, TagNode, WindowMode } from "./generated/api-types";
+import { RAW_FRAME_HEADERS } from "./generated/api-types";
 
 export type {
 	ErrorResponse,
 	FileSummary,
 	FilesResponse,
 	FrameInfo,
-	RawFrameMetadata as RawFrameMetadataContract,
 	TagNode,
 	TagValue,
 	WindowMode,
@@ -182,16 +182,16 @@ function parseOptionalFloatHeader(headers: Headers, name: string): number | null
 
 export function parseRawFrameMetadata(headers: Headers): RawFrameMetadata {
 	return {
-		rows: parseRequiredIntHeader(headers, 'X-Frame-Rows'),
-		columns: parseRequiredIntHeader(headers, 'X-Frame-Columns'),
-		bitsAllocated: parseRequiredIntHeader(headers, 'X-Frame-Bits-Allocated'),
-		pixelRepresentation: parseRequiredIntHeader(headers, 'X-Frame-Pixel-Representation'),
-		samplesPerPixel: parseRequiredIntHeader(headers, 'X-Frame-Samples-Per-Pixel'),
-		photometricInterpretation: requiredHeader(headers, 'X-Frame-Photometric-Interpretation'),
-		rescaleSlope: parseRequiredFloatHeader(headers, 'X-Frame-Rescale-Slope'),
-		rescaleIntercept: parseRequiredFloatHeader(headers, 'X-Frame-Rescale-Intercept'),
-		defaultWc: parseOptionalFloatHeader(headers, 'X-Frame-Default-Wc'),
-		defaultWw: parseOptionalFloatHeader(headers, 'X-Frame-Default-Ww'),
+		rows: parseRequiredIntHeader(headers, RAW_FRAME_HEADERS.rows),
+		columns: parseRequiredIntHeader(headers, RAW_FRAME_HEADERS.columns),
+		bitsAllocated: parseRequiredIntHeader(headers, RAW_FRAME_HEADERS.bitsAllocated),
+		pixelRepresentation: parseRequiredIntHeader(headers, RAW_FRAME_HEADERS.pixelRepresentation),
+		samplesPerPixel: parseRequiredIntHeader(headers, RAW_FRAME_HEADERS.samplesPerPixel),
+		photometricInterpretation: requiredHeader(headers, RAW_FRAME_HEADERS.photometricInterpretation),
+		rescaleSlope: parseRequiredFloatHeader(headers, RAW_FRAME_HEADERS.rescaleSlope),
+		rescaleIntercept: parseRequiredFloatHeader(headers, RAW_FRAME_HEADERS.rescaleIntercept),
+		defaultWc: parseOptionalFloatHeader(headers, RAW_FRAME_HEADERS.defaultWc),
+		defaultWw: parseOptionalFloatHeader(headers, RAW_FRAME_HEADERS.defaultWw),
 	};
 }
 

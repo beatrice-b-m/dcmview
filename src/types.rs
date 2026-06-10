@@ -263,6 +263,17 @@ pub struct RawFrameCacheKey {
     pub frame: u32,
 }
 
+pub const RAW_FRAME_HEADER_ROWS: &str = "X-Frame-Rows";
+pub const RAW_FRAME_HEADER_COLUMNS: &str = "X-Frame-Columns";
+pub const RAW_FRAME_HEADER_BITS_ALLOCATED: &str = "X-Frame-Bits-Allocated";
+pub const RAW_FRAME_HEADER_PIXEL_REPRESENTATION: &str = "X-Frame-Pixel-Representation";
+pub const RAW_FRAME_HEADER_SAMPLES_PER_PIXEL: &str = "X-Frame-Samples-Per-Pixel";
+pub const RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION: &str = "X-Frame-Photometric-Interpretation";
+pub const RAW_FRAME_HEADER_RESCALE_SLOPE: &str = "X-Frame-Rescale-Slope";
+pub const RAW_FRAME_HEADER_RESCALE_INTERCEPT: &str = "X-Frame-Rescale-Intercept";
+pub const RAW_FRAME_HEADER_DEFAULT_WC: &str = "X-Frame-Default-Wc";
+pub const RAW_FRAME_HEADER_DEFAULT_WW: &str = "X-Frame-Default-Ww";
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RawFrameMetadata {
     pub rows: u32,

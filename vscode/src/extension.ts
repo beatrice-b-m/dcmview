@@ -186,7 +186,7 @@ async function resolveBinaryPath(extensionRoot: string, configuredBinary: string
   }
 
   throw new Error(
-    'Unable to find dcmview. Set dcmview.binaryPath, run cargo build, or install dcmview on PATH.',
+    'Unable to find dcmview. Set dcmview.binaryPath, run cargo build, install a VSIX with a bundled binary for this platform, or install dcmview on PATH.',
   );
 }
 

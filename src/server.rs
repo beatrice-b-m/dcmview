@@ -3,7 +3,11 @@ use crate::pixels::{self, FrameCache, FrameRequest, RawFrameCache, RawFrameReque
 use crate::tunnel::{self, TunnelHandle};
 use crate::types::{
     ErrorResponse, FileEntry, FileSummary, FilesResponse, FrameInfo, TagNode, TagValue, TunnelInfo,
-    WindowMode,
+    WindowMode, RAW_FRAME_HEADER_BITS_ALLOCATED, RAW_FRAME_HEADER_COLUMNS,
+    RAW_FRAME_HEADER_DEFAULT_WC, RAW_FRAME_HEADER_DEFAULT_WW,
+    RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION, RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
+    RAW_FRAME_HEADER_RESCALE_INTERCEPT, RAW_FRAME_HEADER_RESCALE_SLOPE, RAW_FRAME_HEADER_ROWS,
+    RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
 };
 use anyhow::{Context, Result};
 use axum::extract::{Path, Query, State};
@@ -370,43 +374,43 @@ async fn raw_frame_handler(
         header::CONTENT_TYPE,
         HeaderValue::from_static("application/octet-stream"),
     );
-    insert_header_if_valid(headers, "X-Frame-Rows", meta.rows.to_string());
-    insert_header_if_valid(headers, "X-Frame-Columns", meta.columns.to_string());
+    insert_header_if_valid(headers, RAW_FRAME_HEADER_ROWS, meta.rows.to_string());
+    insert_header_if_valid(headers, RAW_FRAME_HEADER_COLUMNS, meta.columns.to_string());
     insert_header_if_valid(
         headers,
-        "X-Frame-Bits-Allocated",
+        RAW_FRAME_HEADER_BITS_ALLOCATED,
         meta.bits_allocated.to_string(),
     );
     insert_header_if_valid(
         headers,
-        "X-Frame-Pixel-Representation",
+        RAW_FRAME_HEADER_PIXEL_REPRESENTATION,
         meta.pixel_representation.to_string(),
     );
     insert_header_if_valid(
         headers,
-        "X-Frame-Samples-Per-Pixel",
+        RAW_FRAME_HEADER_SAMPLES_PER_PIXEL,
         meta.samples_per_pixel.to_string(),
     );
     insert_header_if_valid(
         headers,
-        "X-Frame-Photometric-Interpretation",
+        RAW_FRAME_HEADER_PHOTOMETRIC_INTERPRETATION,
         meta.photometric_interpretation.clone(),
     );
     insert_header_if_valid(
         headers,
-        "X-Frame-Rescale-Slope",
+        RAW_FRAME_HEADER_RESCALE_SLOPE,
         meta.rescale_slope.to_string(),
     );
     insert_header_if_valid(
         headers,
-        "X-Frame-Rescale-Intercept",
+        RAW_FRAME_HEADER_RESCALE_INTERCEPT,
         meta.rescale_intercept.to_string(),
     );
     if let Some(wc) = meta.default_wc {
-        insert_header_if_valid(headers, "X-Frame-Default-Wc", wc.to_string());
+        insert_header_if_valid(headers, RAW_FRAME_HEADER_DEFAULT_WC, wc.to_string());
     }
     if let Some(ww) = meta.default_ww {
-        insert_header_if_valid(headers, "X-Frame-Default-Ww", ww.to_string());
+        insert_header_if_valid(headers, RAW_FRAME_HEADER_DEFAULT_WW, ww.to_string());
     }
 
     Ok(response)

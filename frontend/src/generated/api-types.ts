@@ -50,6 +50,19 @@ export interface FrameInfo {
 	default_window: WindowPreset | null;
 }
 
+export const RAW_FRAME_HEADERS = {
+	rows: "X-Frame-Rows",
+	columns: "X-Frame-Columns",
+	bitsAllocated: "X-Frame-Bits-Allocated",
+	pixelRepresentation: "X-Frame-Pixel-Representation",
+	samplesPerPixel: "X-Frame-Samples-Per-Pixel",
+	photometricInterpretation: "X-Frame-Photometric-Interpretation",
+	rescaleSlope: "X-Frame-Rescale-Slope",
+	rescaleIntercept: "X-Frame-Rescale-Intercept",
+	defaultWc: "X-Frame-Default-Wc",
+	defaultWw: "X-Frame-Default-Ww",
+} as const;
+
 export type TagValue =
 	| { type: "string"; value: string }
 	| { type: "number"; value: number }
@@ -63,19 +76,6 @@ export interface TagNode {
 	vr: string;
 	keyword: string;
 	value: TagValue;
-}
-
-export interface RawFrameMetadata {
-	rows: number;
-	columns: number;
-	bits_allocated: number;
-	pixel_representation: number;
-	samples_per_pixel: number;
-	photometric_interpretation: string;
-	rescale_slope: number;
-	rescale_intercept: number;
-	default_wc: number | null;
-	default_ww: number | null;
 }
 
 export interface ErrorResponse {

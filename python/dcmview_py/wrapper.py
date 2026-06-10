@@ -29,6 +29,8 @@ class _OutputMonitor:
 		self._process = process
 		self._url: Optional[str] = None
 		self._url_lock = threading.Lock()
+		self._startup_json_unsupported = False
+		self._startup_json_unsupported_lock = threading.Lock()
 		self._url_ready = threading.Event()
 		self._thread = threading.Thread(target=self._run, name="dcmview-py-output", daemon=True)
 
@@ -47,11 +49,20 @@ class _OutputMonitor:
 		with self._url_lock:
 			return self._url
 
+	@property
+	def startup_json_unsupported(self) -> bool:
+		with self._startup_json_unsupported_lock:
+			return self._startup_json_unsupported
+
 	def _set_url(self, url: str) -> None:
 		with self._url_lock:
 			if self._url is None:
 				self._url = url
 				self._url_ready.set()
+
+	def _set_startup_json_unsupported(self) -> None:
+		with self._startup_json_unsupported_lock:
+			self._startup_json_unsupported = True
 
 	def _run(self) -> None:
 		stdout = self._process.stdout
@@ -66,6 +77,8 @@ class _OutputMonitor:
 				url = _parse_startup_url(line)
 				if url is not None:
 					self._set_url(url)
+				if _is_startup_json_unsupported_line(line):
+					self._set_startup_json_unsupported()
 		finally:
 			stdout.close()
 			self._url_ready.set()
@@ -174,42 +187,50 @@ def view(
 				file=sys.stderr,
 			)
 
-	command = _build_command(
-		paths,
-		port=port,
-		host=host,
-		browser=browser,
-		tunnel=tunnel,
-		tunnel_host=tunnel_host,
-		tunnel_port=tunnel_port,
-		recursive=recursive,
-		timeout=timeout,
-		annotations=annotation_path,
-	)
+	for include_startup_json in (True, False):
+		command = _build_command(
+			paths,
+			port=port,
+			host=host,
+			browser=browser,
+			tunnel=tunnel,
+			tunnel_host=tunnel_host,
+			tunnel_port=tunnel_port,
+			recursive=recursive,
+			timeout=timeout,
+			annotations=annotation_path,
+			include_startup_json=include_startup_json,
+		)
 
-	process = subprocess.Popen(
-		command,
-		stdout=subprocess.PIPE,
-		stderr=subprocess.STDOUT,
-		text=True,
-		bufsize=1,
-	)
-	monitor = _OutputMonitor(process)
-	monitor.start()
+		process = subprocess.Popen(
+			command,
+			stdout=subprocess.PIPE,
+			stderr=subprocess.STDOUT,
+			text=True,
+			bufsize=1,
+		)
+		monitor = _OutputMonitor(process)
+		monitor.start()
 
-	if block:
-		return_code = process.wait()
-		monitor.join()
-		if return_code != 0:
-			raise subprocess.CalledProcessError(return_code, command)
-		return None
+		if block:
+			return_code = process.wait()
+			monitor.join()
+			if return_code != 0:
+				if include_startup_json and monitor.startup_json_unsupported:
+					continue
+				raise subprocess.CalledProcessError(return_code, command)
+			return None
 
-	monitor.wait_for_url(_URL_WAIT_SECONDS)
-	if process.poll() is not None and process.returncode not in (0, None):
-		monitor.join()
-		raise subprocess.CalledProcessError(int(process.returncode), command)
+		monitor.wait_for_url(_URL_WAIT_SECONDS)
+		if process.poll() is not None and process.returncode not in (0, None):
+			monitor.join()
+			if include_startup_json and monitor.startup_json_unsupported:
+				continue
+			raise subprocess.CalledProcessError(int(process.returncode), command)
 
-	return ShutdownHandle(process, monitor)
+		return ShutdownHandle(process, monitor)
+
+	raise RuntimeError("dcmview failed to start")
 
 
 def _view_via_vscode_bridge(
@@ -278,6 +299,7 @@ def _build_command(
 	recursive: bool,
 	timeout: Optional[int],
 	annotations: Optional[str],
+	include_startup_json: bool = True,
 ) -> list[str]:
 	return [
 		_resolve_binary(),
@@ -292,6 +314,7 @@ def _build_command(
 			recursive=recursive,
 			timeout=timeout,
 			annotations=annotations,
+			include_startup_json=include_startup_json,
 		),
 	]
 
@@ -308,11 +331,14 @@ def _build_args(
 	recursive: bool,
 	timeout: Optional[int],
 	annotations: Optional[str],
+	include_startup_json: bool = True,
 ) -> list[str]:
 	if tunnel and not tunnel_host:
 		raise ValueError("tunnel_host is required when tunnel=True")
 
-	command = ["--port", str(port), "--host", host, "--startup-json"]
+	command = ["--port", str(port), "--host", host]
+	if include_startup_json:
+		command.append("--startup-json")
 	if not browser:
 		command.append("--no-browser")
 	if tunnel:
@@ -348,6 +374,21 @@ def _parse_startup_url(line: str) -> Optional[str]:
 		url = trimmed[len(_STARTUP_PREFIX) :].strip()
 		return url or None
 	return None
+
+
+def _is_startup_json_unsupported_line(line: str) -> bool:
+	normalized = line.lower()
+	return "--startup-json" in normalized and any(
+		marker in normalized
+		for marker in [
+			"unexpected",
+			"unrecognized",
+			"unknown",
+			"wasn't expected",
+			"was not expected",
+			"found argument",
+		]
+	)
 
 
 def _bridge_available() -> bool:

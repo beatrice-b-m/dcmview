@@ -17,6 +17,7 @@ use thiserror::Error;
 use tokio::task;
 
 pub const CACHE_CAPACITY: usize = 128;
+// Keep these budgets in sync with README memory guidance and frontend frame retention.
 pub const FRAME_CACHE_MAX_BYTES: usize = 256 * 1024 * 1024; // 256 MiB
 pub const RAW_CACHE_CAPACITY: usize = 512;
 pub const RAW_CACHE_MAX_BYTES: usize = 384 * 1024 * 1024; // 384 MiB
