@@ -1,0 +1,4 @@
+*.rs text eol=lf
+Cargo.toml text eol=lf
+Cargo.lock text eol=lf
+rustfmt.toml text eol=lf
