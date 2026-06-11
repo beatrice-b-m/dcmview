@@ -6,6 +6,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
@@ -20,6 +21,7 @@ _BINARY_ENV = "DCMVIEW_BINARY"
 _VSCODE_BRIDGE_URL_ENV = "DCMVIEW_VSCODE_BRIDGE_URL"
 _VSCODE_BRIDGE_TOKEN_ENV = "DCMVIEW_VSCODE_BRIDGE_TOKEN"
 _VSCODE_BRIDGE_BYPASS_ENV = "DCMVIEW_VSCODE_BYPASS"
+_VSCODE_BRIDGE_REGISTRY_DIR_ENV = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR"
 
 PathInput = Union[str, os.PathLike[str]]
 
@@ -125,20 +127,24 @@ class ShutdownHandle:
 		self.stop()
 
 
+BridgeEndpoint = tuple[str, str]
+
+
 class BridgeShutdownHandle:
 	"""Handle for controlling a VS Code-managed dcmview session."""
 
-	def __init__(self, session_id: str, url: str) -> None:
+	def __init__(self, session_id: str, url: str, endpoint: BridgeEndpoint) -> None:
 		self._session_id = session_id
 		self._url = url
+		self._endpoint = endpoint
 
 	@property
 	def url(self) -> Optional[str]:
 		return self._url
 
 	def stop(self, timeout: float = _STOP_TIMEOUT_SECONDS) -> int:
-		_bridge_json_request("POST", f"/sessions/{self._session_id}/stop", timeout=timeout)
-		response = _bridge_json_request("GET", f"/sessions/{self._session_id}/wait", timeout=timeout)
+		_bridge_json_request("POST", f"/sessions/{self._session_id}/stop", endpoint=self._endpoint, timeout=timeout)
+		response = _bridge_json_request("GET", f"/sessions/{self._session_id}/wait", endpoint=self._endpoint, timeout=timeout)
 		return int(response.get("exitCode") or 0)
 
 	def __enter__(self) -> BridgeShutdownHandle:
@@ -178,9 +184,10 @@ def view(
 		timeout=timeout,
 		annotations=annotation_path,
 	)
-	if _bridge_available():
+	bridge_endpoints = _bridge_endpoints()
+	if bridge_endpoints:
 		try:
-			return _view_via_vscode_bridge(args, block=block)
+			return _view_via_vscode_bridge(args, block=block, endpoints=bridge_endpoints)
 		except (RuntimeError, OSError, urllib.error.URLError) as error:
 			print(
 				f"dcmview: VS Code bridge unavailable ({error}); falling back to local viewer",
@@ -231,25 +238,36 @@ def _view_via_vscode_bridge(
 	args: list[str],
 	*,
 	block: bool,
+	endpoints: list[BridgeEndpoint],
 ) -> Optional[BridgeShutdownHandle]:
-	response = _bridge_json_request(
-		"POST",
-		"/launch",
-		{
-			"program": "dcmview_py",
-			"args": args,
-			"cwd": os.getcwd(),
-			"wait": False,
-		},
-	)
+	payload = {
+		"program": "dcmview_py",
+		"args": args,
+		"cwd": os.getcwd(),
+		"wait": False,
+	}
+	response: dict[str, object] | None = None
+	endpoint: BridgeEndpoint | None = None
+	last_error: BaseException | None = None
+	for candidate in endpoints:
+		try:
+			response = _bridge_json_request("POST", "/launch", payload, endpoint=candidate)
+			endpoint = candidate
+			break
+		except (OSError, urllib.error.URLError, RuntimeError) as error:
+			last_error = error
+	if response is None or endpoint is None:
+		if last_error is not None:
+			raise last_error
+		raise RuntimeError("VS Code bridge unavailable")
 	session_id = str(response["sessionId"])
 	url = str(response["url"])
 	print(f"dcmview: opened in VS Code at {url}")
 
 	if not block:
-		return BridgeShutdownHandle(session_id, url)
+		return BridgeShutdownHandle(session_id, url, endpoint)
 
-	wait_response = _bridge_json_request("GET", f"/sessions/{session_id}/wait")
+	wait_response = _bridge_json_request("GET", f"/sessions/{session_id}/wait", endpoint=endpoint)
 	exit_code = int(wait_response.get("exitCode") or 0)
 	if exit_code != 0:
 		raise subprocess.CalledProcessError(exit_code, ["dcmview-vscode-bridge", *args])
@@ -386,11 +404,92 @@ def _is_startup_json_unsupported_line(line: str) -> bool:
 
 
 def _bridge_available() -> bool:
-	return (
-		os.environ.get(_VSCODE_BRIDGE_BYPASS_ENV) != "1"
-		and bool(os.environ.get(_VSCODE_BRIDGE_URL_ENV))
-		and bool(os.environ.get(_VSCODE_BRIDGE_TOKEN_ENV))
-	)
+	return bool(_bridge_endpoints())
+
+
+def _bridge_endpoints() -> list[BridgeEndpoint]:
+	if os.environ.get(_VSCODE_BRIDGE_BYPASS_ENV) == "1":
+		return []
+
+	url = os.environ.get(_VSCODE_BRIDGE_URL_ENV)
+	token = os.environ.get(_VSCODE_BRIDGE_TOKEN_ENV)
+	if url and token:
+		return [(url, token)]
+
+	return _bridge_registry_endpoints(os.getcwd())
+
+
+def _bridge_registry_endpoints(cwd: str) -> list[BridgeEndpoint]:
+	registry_dir = Path(_bridge_registry_dir())
+	try:
+		paths = list(registry_dir.glob("*.json"))
+	except OSError:
+		return []
+
+	cwd_path = _normalized_path(cwd)
+	candidates: list[tuple[int, int, BridgeEndpoint]] = []
+	for path in paths:
+		try:
+			entry = json.loads(path.read_text(encoding="utf-8"))
+		except (OSError, json.JSONDecodeError):
+			continue
+		if not isinstance(entry, dict):
+			continue
+		url = entry.get("bridgeUrl")
+		token = entry.get("token")
+		if not isinstance(url, str) or not url or not isinstance(token, str) or not token:
+			continue
+		workspace_roots = entry.get("workspaceRoots")
+		if not isinstance(workspace_roots, list):
+			workspace_roots = []
+		match_score = _workspace_match_score(cwd_path, workspace_roots)
+		created_at = entry.get("createdAtMs")
+		created_score = int(created_at) if isinstance(created_at, int) else 0
+		candidates.append((match_score, created_score, (url, token)))
+
+	candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
+	endpoints: list[BridgeEndpoint] = []
+	seen: set[BridgeEndpoint] = set()
+	for _, _, endpoint in candidates:
+		if endpoint not in seen:
+			endpoints.append(endpoint)
+			seen.add(endpoint)
+	return endpoints
+
+
+def _bridge_registry_dir() -> str:
+	configured = os.environ.get(_VSCODE_BRIDGE_REGISTRY_DIR_ENV)
+	if configured:
+		return configured
+
+	runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+	if runtime_dir and os.path.isabs(runtime_dir):
+		return str(Path(runtime_dir) / "dcmview" / "vscode-bridges")
+
+	user = os.environ.get("USER") or os.environ.get("USERNAME") or "default"
+	return str(Path(tempfile.gettempdir()) / f"dcmview-vscode-bridges-{_safe_registry_segment(user)}")
+
+
+def _safe_registry_segment(value: str) -> str:
+	return "".join(character if character.isalnum() or character in "_.-" else "_" for character in value)
+
+
+def _normalized_path(value: str) -> Path:
+	return Path(value).expanduser().resolve(strict=False)
+
+
+def _workspace_match_score(cwd: Path, workspace_roots: list[object]) -> int:
+	best = 0
+	for root in workspace_roots:
+		if not isinstance(root, str) or not root:
+			continue
+		root_path = _normalized_path(root)
+		try:
+			cwd.relative_to(root_path)
+		except ValueError:
+			continue
+		best = max(best, len(str(root_path)))
+	return best
 
 
 def _bridge_json_request(
@@ -398,10 +497,16 @@ def _bridge_json_request(
 	path: str,
 	payload: Optional[dict[str, object]] = None,
 	*,
+	endpoint: Optional[BridgeEndpoint] = None,
 	timeout: float = _STOP_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
-	base_url = os.environ[_VSCODE_BRIDGE_URL_ENV].rstrip("/")
-	token = os.environ[_VSCODE_BRIDGE_TOKEN_ENV]
+	if endpoint is None:
+		endpoints = _bridge_endpoints()
+		if not endpoints:
+			raise RuntimeError("VS Code bridge unavailable")
+		endpoint = endpoints[0]
+	base_url = endpoint[0].rstrip("/")
+	token = endpoint[1]
 	body = None if payload is None else json.dumps(payload).encode("utf-8")
 	request = urllib.request.Request(
 		f"{base_url}{path}",

@@ -2,12 +2,14 @@ import * as childProcess from 'child_process';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as http from 'http';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 
 const STARTUP_PREFIX = 'dcmview: server running at ';
 const STARTUP_EVENT_TYPE = 'server_started';
 const BRIDGE_BYPASS_ENV = 'DCMVIEW_VSCODE_BYPASS';
+const BRIDGE_REGISTRY_DIR_ENV = 'DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR';
 const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
 const BRIDGE_URL_ENV = 'DCMVIEW_VSCODE_BRIDGE_URL';
 
@@ -38,9 +40,20 @@ interface RunningSession {
 }
 
 interface BridgeServer {
+  readonly id: string;
   readonly server: http.Server;
   readonly url: string;
   readonly token: string;
+  registryPath?: string;
+}
+
+interface BridgeRegistryEntry {
+  version: 1;
+  instanceId: string;
+  bridgeUrl: string;
+  token: string;
+  workspaceRoots: string[];
+  createdAtMs: number;
 }
 
 interface BridgeLaunchRequest {
@@ -574,10 +587,13 @@ async function configureTerminalInterception(context: vscode.ExtensionContext): 
   try {
     const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
     const bridge = await ensureBridge(context);
+    const registryDir = bridgeRegistryDirectory();
+    await writeBridgeRegistry(bridge, registryDir);
     const shimDir = await ensureShimDirectory(context, binary);
 
     env.description = 'Routes dcmview terminal commands into the VS Code dcmview viewer.';
     env.prepend('PATH', `${shimDir}${path.delimiter}`);
+    env.replace(BRIDGE_REGISTRY_DIR_ENV, registryDir);
     env.replace(BRIDGE_URL_ENV, bridge.url);
     env.replace(BRIDGE_TOKEN_ENV, bridge.token);
     output.appendLine(`dcmview terminal interception enabled at ${bridge.url}`);
@@ -611,6 +627,7 @@ async function ensureBridge(context: vscode.ExtensionContext): Promise<BridgeSer
   }
 
   bridgeServer = {
+    id: crypto.randomUUID(),
     server,
     token,
     url: `http://127.0.0.1:${address.port}`,
@@ -623,6 +640,10 @@ async function stopBridge(): Promise<void> {
   bridgeServer = undefined;
   if (!bridge) {
     return;
+  }
+
+  if (bridge.registryPath) {
+    await fs.promises.unlink(bridge.registryPath).catch(() => undefined);
   }
 
   await new Promise<void>((resolve) => {
@@ -755,6 +776,71 @@ async function ensureShimDirectory(context: vscode.ExtensionContext, binary: str
     writeShim(shimDir, 'dcmview-py', binary, 'dcmview-py'),
   ]);
   return shimDir;
+}
+
+export function bridgeRegistryDirectory(
+  env: NodeJS.ProcessEnv = process.env,
+  tmpDir: string = os.tmpdir(),
+): string {
+  const configured = env[BRIDGE_REGISTRY_DIR_ENV];
+  if (configured && configured.trim().length > 0) {
+    return configured;
+  }
+
+  const runtimeDir = env.XDG_RUNTIME_DIR;
+  if (runtimeDir && path.isAbsolute(runtimeDir)) {
+    return path.join(runtimeDir, 'dcmview', 'vscode-bridges');
+  }
+
+  const user = env.USER || env.USERNAME || 'default';
+  return path.join(tmpDir, `dcmview-vscode-bridges-${safeRegistrySegment(user)}`);
+}
+
+function safeRegistrySegment(value: string): string {
+  return value.replace(/[^A-Za-z0-9_.-]/g, '_');
+}
+
+async function writeBridgeRegistry(bridge: BridgeServer, registryDir: string): Promise<void> {
+  await fs.promises.mkdir(registryDir, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') {
+    await fs.promises.chmod(registryDir, 0o700);
+  }
+
+  const registryPath = path.join(registryDir, `${bridge.id}.json`);
+  const previousRegistryPath = bridge.registryPath;
+  const tempPath = `${registryPath}.${process.pid}.tmp`;
+  const payload = JSON.stringify(bridgeRegistryEntry(bridge, workspaceRoots()), null, 2);
+  await fs.promises.writeFile(tempPath, payload, { encoding: 'utf8', mode: 0o600 });
+  if (process.platform !== 'win32') {
+    await fs.promises.chmod(tempPath, 0o600);
+  }
+  await fs.promises.rename(tempPath, registryPath);
+  bridge.registryPath = registryPath;
+  if (previousRegistryPath && previousRegistryPath !== registryPath) {
+    await fs.promises.unlink(previousRegistryPath).catch(() => undefined);
+  }
+}
+
+export function bridgeRegistryEntry(
+  bridge: Pick<BridgeServer, 'id' | 'url' | 'token'>,
+  workspaceRoots: string[],
+  createdAtMs = Date.now(),
+): BridgeRegistryEntry {
+  return {
+    version: 1,
+    instanceId: bridge.id,
+    bridgeUrl: bridge.url,
+    token: bridge.token,
+    workspaceRoots,
+    createdAtMs,
+  };
+}
+
+function workspaceRoots(): string[] {
+  return (vscode.workspace.workspaceFolders ?? [])
+    .map((folder) => folder.uri)
+    .filter((uri) => uri.scheme === 'file')
+    .map((uri) => uri.fsPath);
 }
 
 async function writeShim(

@@ -9,6 +9,7 @@ import sys
 import time
 import tempfile
 import unittest
+import urllib.error
 import zipfile
 from contextlib import redirect_stdout
 from io import StringIO
@@ -468,6 +469,98 @@ class WrapperTests(unittest.TestCase):
 				response = wrapper._bridge_json_request(wait["method"], wait["path"])
 
 		self.assertEqual(response, wait["response"])
+
+	def test_bridge_registry_endpoints_prefer_matching_workspace_then_newest(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			(registry / "old.json").write_text(
+				json.dumps(
+					{
+						"version": 1,
+						"instanceId": "old",
+						"bridgeUrl": "http://127.0.0.1:1111",
+						"token": "old-token",
+						"workspaceRoots": ["/elsewhere"],
+						"createdAtMs": 999,
+					}
+				),
+				encoding="utf-8",
+			)
+			(registry / "match.json").write_text(
+				json.dumps(
+					{
+						"version": 1,
+						"instanceId": "match",
+						"bridgeUrl": "http://127.0.0.1:2222",
+						"token": "match-token",
+						"workspaceRoots": [str(REPO_ROOT)],
+						"createdAtMs": 1,
+					}
+				),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT / "tests"))
+
+		self.assertEqual(endpoints[0], ("http://127.0.0.1:2222", "match-token"))
+		self.assertEqual(endpoints[1], ("http://127.0.0.1:1111", "old-token"))
+
+	def test_bridge_registry_discovery_ignores_invalid_entries(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			(registry / "invalid.json").write_text("{", encoding="utf-8")
+			(registry / "missing-token.json").write_text(
+				json.dumps({"bridgeUrl": "http://127.0.0.1:1111"}),
+				encoding="utf-8",
+			)
+			(registry / "valid.json").write_text(
+				json.dumps(
+					{
+						"bridgeUrl": "http://127.0.0.1:3333",
+						"token": "valid-token",
+						"workspaceRoots": [],
+						"createdAtMs": 7,
+					}
+				),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT))
+
+		self.assertEqual(endpoints, [("http://127.0.0.1:3333", "valid-token")])
+
+	def test_view_tries_next_registry_bridge_after_stale_entry(self) -> None:
+		endpoints = [
+			("http://127.0.0.1:1111", "stale"),
+			("http://127.0.0.1:2222", "live"),
+		]
+
+		def fake_bridge_request(method, path, payload=None, *, endpoint=None, timeout=5.0):
+			if endpoint == endpoints[0]:
+				raise urllib.error.URLError("stale")
+			self.assertEqual(endpoint, endpoints[1])
+			if method == "POST":
+				return {"sessionId": "abc", "url": "http://127.0.0.1:9999"}
+			return {"exitCode": 0}
+
+		with mock.patch("dcmview_py.wrapper._bridge_endpoints", return_value=endpoints):
+			with mock.patch("dcmview_py.wrapper._bridge_json_request", side_effect=fake_bridge_request):
+				with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+					with redirect_stdout(StringIO()):
+						result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
+
+		self.assertIsNone(result)
+		popen_mock.assert_not_called()
 
 	def test_view_returns_bridge_shutdown_handle_for_nonblocking_calls(self) -> None:
 		with mock.patch.dict(

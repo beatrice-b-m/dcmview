@@ -5,6 +5,8 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   binaryCandidates,
+  bridgeRegistryDirectory,
+  bridgeRegistryEntry,
   bridgeStopResponse,
   bridgeWaitResponse,
   collectFileSystemPaths,
@@ -156,6 +158,38 @@ suite('dcmview extension', () => {
     assert.strictEqual(isAuthorizedBridgeRequest({ headers: { authorization: 'Bearer wrong' } }, token), false);
     assert.deepStrictEqual(bridgeStopResponse(), bridgeContract.stop.response);
     assert.deepStrictEqual(bridgeWaitResponse(bridgeContract.wait.response.exitCode), bridgeContract.wait.response);
+  });
+
+  test('builds deterministic bridge registry locations', () => {
+    assert.strictEqual(
+      bridgeRegistryDirectory({ DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR: '/custom/bridges' }, '/tmp'),
+      '/custom/bridges',
+    );
+    assert.strictEqual(
+      bridgeRegistryDirectory({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp'),
+      path.join('/run/user/1000', 'dcmview', 'vscode-bridges'),
+    );
+    assert.strictEqual(
+      bridgeRegistryDirectory({ USER: 'remote user' }, '/tmp'),
+      path.join('/tmp', 'dcmview-vscode-bridges-remote_user'),
+    );
+  });
+
+  test('serializes bridge registry entries for out-of-band discovery', () => {
+    const entry = bridgeRegistryEntry(
+      { id: 'instance-1', url: 'http://127.0.0.1:4567', token: 'secret' },
+      ['/workspace'],
+      12345,
+    );
+
+    assert.deepStrictEqual(entry, {
+      version: 1,
+      instanceId: 'instance-1',
+      bridgeUrl: 'http://127.0.0.1:4567',
+      token: 'secret',
+      workspaceRoots: ['/workspace'],
+      createdAtMs: 12345,
+    });
   });
 
   test('registers public commands', async () => {

@@ -26,6 +26,12 @@ private loopback bridge and prepends generated shims to new integrated
 terminals. Open a fresh terminal after the Extension Development Host starts so
 the terminal receives the bridge environment.
 
+The bridge is also published through a short-lived registry file on the remote
+host so direct `dcmview` binaries and `dcmview_py.view(...)` calls from VS Code
+Jupyter kernels can route into the VS Code webview even when they did not
+inherit the integrated-terminal environment. Set
+`DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing custom registry locations.
+
 ## Run in an Extension Development Host
 
 1. Open this repository in VS Code.
@@ -81,6 +87,8 @@ Python wrapper path without extension interception.
   the extension-managed session exits.
 - Fresh integrated terminal `python -m dcmview_py ...` and `dcmview-py ...` open
   webview panels.
+- VS Code Jupyter kernels connected to the same remote workspace discover the
+  bridge registry and open webview panels for `dcmview_py.view(...)` calls.
 - Python `dcmview_py.view(..., block=False)` returns a handle whose `stop()`
   closes the extension-managed session.
 - `DCMVIEW_VSCODE_BYPASS=1` disables interception for the current command.
