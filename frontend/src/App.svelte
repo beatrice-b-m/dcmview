@@ -335,7 +335,11 @@
 		style={`--file-nav-width:${fileNavigatorWidthPx}px; --tag-panel-width:${tagPanelWidth}px;`}
 	>
 		<header class="topbar">
-			<img class="brand-mark" src="/assets/dcmview-logo.svg" alt="dcmview" />
+			<img
+				class="brand-mark"
+				src="/assets/dcmview-wordmark-darkmode-opaque-background.png"
+				alt="dcmview"
+			/>
 			<OpenImageTabs
 				files={filesResponse.files}
 				openTabs={openTabIndexes}
@@ -499,9 +503,10 @@
 	.brand-mark {
 		align-self: center;
 		display: block;
-		width: 1.55rem;
-		height: 1.55rem;
-		border-radius: 0.28rem;
+		width: 7.6rem;
+		height: 1.9rem;
+		border-radius: 0.2rem;
+		object-fit: contain;
 	}
 
 	.workspace {
