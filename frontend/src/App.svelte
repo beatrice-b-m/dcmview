@@ -337,7 +337,7 @@
 		<header class="topbar">
 			<img
 				class="brand-mark"
-				src="/assets/dcmview-wordmark-darkmode-opaque-background.png"
+				src="/assets/dcmview-icon.png"
 				alt="dcmview"
 			/>
 			<OpenImageTabs
@@ -503,10 +503,9 @@
 	.brand-mark {
 		align-self: center;
 		display: block;
-		width: 7.6rem;
-		height: 1.9rem;
-		border-radius: 0.2rem;
-		object-fit: contain;
+		width: 1.55rem;
+		height: 1.55rem;
+		border-radius: 0.28rem;
 	}
 
 	.workspace {
