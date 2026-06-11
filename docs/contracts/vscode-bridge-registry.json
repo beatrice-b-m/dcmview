@@ -1,0 +1,145 @@
+{
+  "ttlMs": 10800000,
+  "refreshMs": 3600000,
+  "registryDirs": [
+    {
+      "name": "env override",
+      "env": {
+        "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": "/custom/bridges",
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "USER": "ignored"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/custom/bridges"
+    },
+    {
+      "name": "xdg runtime",
+      "env": {
+        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "USER": "ignored"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/run/user/1000/dcmview/vscode-bridges"
+    },
+    {
+      "name": "tmp fallback",
+      "env": {
+        "USER": "remote user@example"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/tmp/dcmview-vscode-bridges-remote_user_example"
+    }
+  ],
+  "safeSegments": [
+    {
+      "input": "remote user@example",
+      "expected": "remote_user_example"
+    },
+    {
+      "input": "abc.DEF-123_ok",
+      "expected": "abc.DEF-123_ok"
+    }
+  ],
+  "expiry": {
+    "nowMs": 20000000,
+    "cases": [
+      {
+        "name": "fresh",
+        "createdAtMs": 19999999,
+        "expired": false
+      },
+      {
+        "name": "exact ttl",
+        "createdAtMs": 9200000,
+        "expired": false
+      },
+      {
+        "name": "past ttl",
+        "createdAtMs": 9199999,
+        "expired": true
+      },
+      {
+        "name": "zero",
+        "createdAtMs": 0,
+        "expired": true
+      },
+      {
+        "name": "far future",
+        "createdAtMs": 30800001,
+        "expired": true
+      }
+    ]
+  },
+  "ordering": {
+    "nowMs": 2000000,
+    "cwd": "/workspace/project/notebooks",
+    "entries": [
+      {
+        "file": "unmatched-new.json",
+        "entry": {
+          "version": 1,
+          "instanceId": "unmatched-new",
+          "bridgeUrl": "http://127.0.0.1:1111",
+          "token": "unmatched-token",
+          "workspaceRoots": ["/elsewhere"],
+          "createdAtMs": 1999999
+        }
+      },
+      {
+        "file": "matched-old.json",
+        "entry": {
+          "version": 1,
+          "instanceId": "matched-old",
+          "bridgeUrl": "http://127.0.0.1:2222",
+          "token": "matched-old-token",
+          "workspaceRoots": ["/workspace"],
+          "createdAtMs": 1999900
+        }
+      },
+      {
+        "file": "matched-new.json",
+        "entry": {
+          "version": 1,
+          "instanceId": "matched-new",
+          "bridgeUrl": "http://127.0.0.1:3333",
+          "token": "matched-new-token",
+          "workspaceRoots": ["/workspace/project"],
+          "createdAtMs": 1999800
+        }
+      },
+      {
+        "file": "tie-new.json",
+        "entry": {
+          "version": 1,
+          "instanceId": "tie-new",
+          "bridgeUrl": "http://127.0.0.1:4444",
+          "token": "tie-new-token",
+          "workspaceRoots": ["/workspace/project"],
+          "createdAtMs": 1999901
+        }
+      },
+      {
+        "file": "duplicate.json",
+        "entry": {
+          "version": 1,
+          "instanceId": "duplicate",
+          "bridgeUrl": "http://127.0.0.1:3333",
+          "token": "matched-new-token",
+          "workspaceRoots": ["/workspace/project"],
+          "createdAtMs": 1999700
+        }
+      }
+    ],
+    "expectedAllowAny": [
+      ["http://127.0.0.1:4444", "tie-new-token"],
+      ["http://127.0.0.1:3333", "matched-new-token"],
+      ["http://127.0.0.1:2222", "matched-old-token"],
+      ["http://127.0.0.1:1111", "unmatched-token"]
+    ],
+    "expectedRequireWorkspace": [
+      ["http://127.0.0.1:4444", "tie-new-token"],
+      ["http://127.0.0.1:3333", "matched-new-token"],
+      ["http://127.0.0.1:2222", "matched-old-token"]
+    ]
+  }
+}

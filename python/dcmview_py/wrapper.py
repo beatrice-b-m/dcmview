@@ -23,7 +23,7 @@ _VSCODE_BRIDGE_URL_ENV = "DCMVIEW_VSCODE_BRIDGE_URL"
 _VSCODE_BRIDGE_TOKEN_ENV = "DCMVIEW_VSCODE_BRIDGE_TOKEN"
 _VSCODE_BRIDGE_BYPASS_ENV = "DCMVIEW_VSCODE_BYPASS"
 _VSCODE_BRIDGE_REGISTRY_DIR_ENV = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR"
-_BRIDGE_REGISTRY_MAX_AGE_SECONDS = 12 * 60 * 60
+_BRIDGE_REGISTRY_MAX_AGE_SECONDS = 3 * 60 * 60
 
 PathInput = Union[str, os.PathLike[str]]
 
@@ -169,6 +169,7 @@ def view(
 	recursive: bool = True,
 	timeout: Optional[int] = None,
 	annotations: Optional[PathInput] = None,
+	vscode_bridge: bool = True,
 ) -> Optional[ShutdownHandle | BridgeShutdownHandle]:
 	"""Launch dcmview for one or more filesystem paths."""
 
@@ -186,7 +187,7 @@ def view(
 		timeout=timeout,
 		annotations=annotation_path,
 	)
-	bridge_endpoints = _bridge_endpoints()
+	bridge_endpoints = _bridge_endpoints() if vscode_bridge else []
 	if bridge_endpoints:
 		try:
 			return _view_via_vscode_bridge(args, block=block, endpoints=bridge_endpoints)
@@ -427,6 +428,8 @@ def _bridge_endpoints() -> list[BridgeEndpoint]:
 
 def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> list[BridgeEndpoint]:
 	registry_dir = Path(_bridge_registry_dir())
+	if not _registry_dir_is_trusted(registry_dir):
+		return []
 	try:
 		paths = list(registry_dir.glob("*.json"))
 	except OSError:
@@ -443,12 +446,17 @@ def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> lis
 			continue
 		if not isinstance(entry, dict):
 			continue
+		version = entry.get("version")
+		if version is not None and (
+			not isinstance(version, int) or isinstance(version, bool) or version != 1
+		):
+			continue
 		url = entry.get("bridgeUrl")
 		token = entry.get("token")
 		if not isinstance(url, str) or not url or not isinstance(token, str) or not token:
 			continue
 		created_at = entry.get("createdAtMs")
-		if not isinstance(created_at, int):
+		if not isinstance(created_at, int) or isinstance(created_at, bool):
 			_remove_registry_file(path)
 			continue
 		if _is_expired_registry_entry(created_at, now_ms):
@@ -470,6 +478,25 @@ def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> lis
 	return endpoints
 
 
+def _registry_dir_is_trusted(
+	path: Path,
+	*,
+	stat_result: Optional[os.stat_result] = None,
+	euid: Optional[int] = None,
+) -> bool:
+	if _is_windows() or not hasattr(os, "geteuid"):
+		return True
+	try:
+		stat_result = path.stat() if stat_result is None else stat_result
+	except OSError:
+		return False
+	if euid is None:
+		euid = os.geteuid()
+	uid = getattr(stat_result, "st_uid", euid)
+	mode = getattr(stat_result, "st_mode", 0)
+	return uid == euid and mode & 0o022 == 0
+
+
 def _is_expired_registry_entry(created_at_ms: int, now_ms: int) -> bool:
 	max_age_ms = _BRIDGE_REGISTRY_MAX_AGE_SECONDS * 1000
 	return created_at_ms <= 0 or created_at_ms > now_ms + max_age_ms or now_ms - created_at_ms > max_age_ms
@@ -484,6 +511,8 @@ def _remove_registry_file(path: Path) -> None:
 
 def _remove_bridge_registry_endpoint(endpoint: BridgeEndpoint) -> None:
 	registry_dir = Path(_bridge_registry_dir())
+	if not _registry_dir_is_trusted(registry_dir):
+		return
 	try:
 		paths = list(registry_dir.glob("*.json"))
 	except OSError:

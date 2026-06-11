@@ -30,9 +30,14 @@ The bridge is also published through a short-lived registry file on the remote
 host so direct `dcmview` binaries launched inside the active workspace and
 `dcmview_py.view(...)` calls from VS Code Jupyter kernels can route into the VS
 Code webview even when they did not inherit the integrated-terminal environment.
-Registry entries expire after 12 hours so crash leftovers do not affect future
-sessions indefinitely. Set `DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing
-custom registry locations.
+The extension refreshes the registry hourly; entries expire after 3 hours so
+crash leftovers do not affect future sessions indefinitely. Direct Rust CLI
+registry discovery requires the current working directory to be inside a VS Code
+workspace root. The Python wrapper intentionally accepts any live bridge on the
+host for notebook kernels whose cwd may be outside the workspace; pass
+`vscode_bridge=False` to `dcmview_py.view(...)` or set
+`DCMVIEW_VSCODE_BYPASS=1` to opt out. Set
+`DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing custom registry locations.
 
 ## Run in an Extension Development Host
 

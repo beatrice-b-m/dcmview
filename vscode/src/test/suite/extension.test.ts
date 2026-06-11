@@ -1,9 +1,12 @@
 import * as assert from 'assert';
 import { EventEmitter } from 'events';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import {
+  BRIDGE_REGISTRY_MAX_AGE_MS,
+  BRIDGE_REGISTRY_REFRESH_MS,
   binaryCandidates,
   bridgeRegistryDirectory,
   bridgeRegistryEntry,
@@ -11,11 +14,16 @@ import {
   bridgeWaitResponse,
   collectFileSystemPaths,
   isAuthorizedBridgeRequest,
+  isExpiredRegistryEntry,
+  orderBridgeRegistryEndpoints,
   normalizeInterceptedArgs,
   parseStartupLine,
   posixShim,
+  registryDirectoryIsTrusted,
+  safeRegistrySegment,
   waitForStartup,
   waitForStartupOrTerminate,
+  writeBridgeRegistry,
   windowsShim,
 } from '../../extension';
 
@@ -36,6 +44,9 @@ const output = {
 };
 const bridgeContract = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '../../../../docs/contracts/bridge-protocol.json'), 'utf8'),
+);
+const registryContract = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../../../docs/contracts/vscode-bridge-registry.json'), 'utf8'),
 );
 
 suite('dcmview extension', () => {
@@ -175,6 +186,46 @@ suite('dcmview extension', () => {
     );
   });
 
+  test('matches shared bridge registry contract', () => {
+    assert.strictEqual(BRIDGE_REGISTRY_MAX_AGE_MS, registryContract.ttlMs);
+    assert.strictEqual(BRIDGE_REGISTRY_REFRESH_MS, registryContract.refreshMs);
+
+    for (const testCase of registryContract.registryDirs) {
+      assert.strictEqual(bridgeRegistryDirectory(testCase.env, testCase.tmpDir), testCase.expected);
+    }
+    for (const testCase of registryContract.safeSegments) {
+      assert.strictEqual(safeRegistrySegment(testCase.input), testCase.expected);
+    }
+    for (const testCase of registryContract.expiry.cases) {
+      assert.strictEqual(
+        isExpiredRegistryEntry(testCase.createdAtMs, registryContract.expiry.nowMs),
+        testCase.expired,
+      );
+    }
+
+    const entries = registryContract.ordering.entries.map((item: { entry: unknown }) => item.entry) as Parameters<
+      typeof orderBridgeRegistryEndpoints
+    >[1];
+    assert.deepStrictEqual(
+      orderBridgeRegistryEndpoints(
+        registryContract.ordering.cwd,
+        entries,
+        false,
+        registryContract.ordering.nowMs,
+      ),
+      registryContract.ordering.expectedAllowAny,
+    );
+    assert.deepStrictEqual(
+      orderBridgeRegistryEndpoints(
+        registryContract.ordering.cwd,
+        entries,
+        true,
+        registryContract.ordering.nowMs,
+      ),
+      registryContract.ordering.expectedRequireWorkspace,
+    );
+  });
+
   test('serializes bridge registry entries for out-of-band discovery', () => {
     const entry = bridgeRegistryEntry(
       { id: 'instance-1', url: 'http://127.0.0.1:4567', token: 'secret' },
@@ -190,6 +241,43 @@ suite('dcmview extension', () => {
       workspaceRoots: ['/workspace'],
       createdAtMs: 12345,
     });
+  });
+
+  test('refresh rewrites the same bridge registry entry with a new timestamp', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dcmview-registry-'));
+    const registryDir = path.join(root, 'bridges');
+    const bridge = { id: 'instance-1', url: 'http://127.0.0.1:4567', token: 'secret' };
+    try {
+      const firstPath = await writeBridgeRegistry(bridge, registryDir, ['/workspace'], 1000);
+      let entry = JSON.parse(fs.readFileSync(firstPath, 'utf8'));
+      assert.strictEqual(entry.instanceId, 'instance-1');
+      assert.strictEqual(entry.createdAtMs, 1000);
+
+      const secondPath = await writeBridgeRegistry(bridge, registryDir, ['/workspace'], 2000);
+      entry = JSON.parse(fs.readFileSync(secondPath, 'utf8'));
+      assert.strictEqual(secondPath, firstPath);
+      assert.strictEqual(entry.instanceId, 'instance-1');
+      assert.strictEqual(entry.createdAtMs, 2000);
+
+      fs.unlinkSync(secondPath);
+      const thirdPath = await writeBridgeRegistry(bridge, registryDir, ['/workspace'], 3000);
+      entry = JSON.parse(fs.readFileSync(thirdPath, 'utf8'));
+      assert.strictEqual(thirdPath, firstPath);
+      assert.strictEqual(entry.createdAtMs, 3000);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('rejects untrusted unix registry directory metadata', () => {
+    if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+      assert.strictEqual(registryDirectoryIsTrusted({ uid: 9999, mode: 0o777 } as fs.Stats), true);
+      return;
+    }
+    const uid = process.getuid();
+    assert.strictEqual(registryDirectoryIsTrusted({ uid, mode: 0o700 } as fs.Stats), true);
+    assert.strictEqual(registryDirectoryIsTrusted({ uid: uid + 1, mode: 0o700 } as fs.Stats), false);
+    assert.strictEqual(registryDirectoryIsTrusted({ uid, mode: 0o722 } as fs.Stats), false);
   });
 
   test('registers public commands', async () => {

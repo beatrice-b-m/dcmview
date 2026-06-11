@@ -27,6 +27,7 @@ from dcmview_py import wrapper
 
 FIXTURE_FILE = REPO_ROOT / "FFDM_R_MLO_ComboHD.dcm"
 BRIDGE_CONTRACT = REPO_ROOT / "docs" / "contracts" / "bridge-protocol.json"
+REGISTRY_CONTRACT = REPO_ROOT / "docs" / "contracts" / "vscode-bridge-registry.json"
 VERIFY_WHEEL_INSTALL = REPO_ROOT / "scripts" / "verify_wheel_install.py"
 
 
@@ -518,6 +519,38 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(endpoints[0], ("http://127.0.0.1:2222", "match-token"))
 		self.assertEqual(endpoints[1], ("http://127.0.0.1:1111", "old-token"))
 
+	def test_bridge_registry_matches_shared_contract(self) -> None:
+		contract = json.loads(REGISTRY_CONTRACT.read_text(encoding="utf-8"))
+		self.assertEqual(wrapper._BRIDGE_REGISTRY_MAX_AGE_SECONDS * 1000, contract["ttlMs"])
+
+		for test_case in contract["registryDirs"]:
+			with mock.patch.dict(os.environ, test_case["env"], clear=True):
+				with mock.patch("dcmview_py.wrapper.tempfile.gettempdir", return_value=test_case["tmpDir"]):
+					self.assertEqual(wrapper._bridge_registry_dir(), test_case["expected"])
+		for test_case in contract["safeSegments"]:
+			self.assertEqual(wrapper._safe_registry_segment(test_case["input"]), test_case["expected"])
+		for test_case in contract["expiry"]["cases"]:
+			self.assertEqual(
+				wrapper._is_expired_registry_entry(test_case["createdAtMs"], contract["expiry"]["nowMs"]),
+				test_case["expired"],
+			)
+
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			for item in contract["ordering"]["entries"]:
+				(registry / item["file"]).write_text(json.dumps(item["entry"]), encoding="utf-8")
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_registry_endpoints(
+					contract["ordering"]["cwd"],
+					now_ms=contract["ordering"]["nowMs"],
+				)
+
+		self.assertEqual([list(endpoint) for endpoint in endpoints], contract["ordering"]["expectedAllowAny"])
+
 	def test_bridge_registry_discovery_ignores_invalid_entries(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			registry = Path(tmp)
@@ -547,6 +580,39 @@ class WrapperTests(unittest.TestCase):
 				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT), now_ms=now_ms)
 
 		self.assertEqual(endpoints, [("http://127.0.0.1:3333", "valid-token")])
+
+	def test_bridge_registry_discovery_preserves_unknown_versions(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			future = registry / "future.json"
+			malformed_v1 = registry / "malformed-v1.json"
+			future.write_text(
+				json.dumps({"version": 2, "createdAtMs": "new-format"}),
+				encoding="utf-8",
+			)
+			malformed_v1.write_text(
+				json.dumps({"version": 1, "bridgeUrl": "http://127.0.0.1:3333", "token": "token"}),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT), now_ms=100_000)
+
+			self.assertEqual(endpoints, [])
+			self.assertTrue(future.exists())
+			self.assertFalse(malformed_v1.exists())
+
+	def test_bridge_registry_discovery_ignores_untrusted_unix_directories(self) -> None:
+		stat_result = os.stat_result((0o777, 0, 0, 0, 9999, 0, 0, 0, 0, 0))
+
+		with mock.patch("dcmview_py.wrapper._is_windows", return_value=False):
+			trusted = wrapper._registry_dir_is_trusted(Path("/tmp/dcmview"), stat_result=stat_result, euid=1000)
+
+		self.assertFalse(trusted)
 
 	def test_bridge_registry_discovery_removes_expired_entries(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
@@ -637,6 +703,23 @@ class WrapperTests(unittest.TestCase):
 
 		self.assertIsNone(result)
 		popen_mock.assert_not_called()
+
+	def test_view_can_disable_vscode_bridge_per_call(self) -> None:
+		process = mock.Mock()
+		process.stdout = StringIO("dcmview: server running at http://127.0.0.1:51234\n")
+		process.poll.return_value = None
+		process.returncode = None
+
+		with mock.patch("dcmview_py.wrapper._bridge_endpoints") as endpoints_mock:
+			with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
+				with mock.patch("dcmview_py.wrapper.subprocess.Popen", return_value=process) as popen_mock:
+					with redirect_stdout(StringIO()):
+						handle = wrapper.view([FIXTURE_FILE], browser=True, block=False, vscode_bridge=False)
+
+		self.assertIsInstance(handle, wrapper.ShutdownHandle)
+		endpoints_mock.assert_not_called()
+		popen_env = popen_mock.call_args.kwargs["env"]
+		self.assertEqual(popen_env["DCMVIEW_VSCODE_BYPASS"], "1")
 
 	def test_view_returns_bridge_shutdown_handle_for_nonblocking_calls(self) -> None:
 		with mock.patch.dict(

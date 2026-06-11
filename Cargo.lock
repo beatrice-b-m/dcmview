@@ -605,6 +605,7 @@ dependencies = [
  "futures",
  "image",
  "jpeg2k",
+ "libc",
  "lru",
  "open",
  "rayon",

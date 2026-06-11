@@ -12,6 +12,8 @@ const BRIDGE_BYPASS_ENV = 'DCMVIEW_VSCODE_BYPASS';
 const BRIDGE_REGISTRY_DIR_ENV = 'DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR';
 const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
 const BRIDGE_URL_ENV = 'DCMVIEW_VSCODE_BRIDGE_URL';
+export const BRIDGE_REGISTRY_MAX_AGE_MS = 3 * 60 * 60 * 1000;
+export const BRIDGE_REGISTRY_REFRESH_MS = 60 * 60 * 1000;
 
 interface StartupEvent {
   type: string;
@@ -47,6 +49,13 @@ interface BridgeServer {
   registryPath?: string;
 }
 
+interface WritableBridgeRegistry {
+  readonly id: string;
+  readonly url: string;
+  readonly token: string;
+  registryPath?: string;
+}
+
 interface BridgeRegistryEntry {
   version: 1;
   instanceId: string;
@@ -73,6 +82,7 @@ const sessions = new Set<RunningSession>();
 const sessionsById = new Map<string, RunningSession>();
 let outputChannel: vscode.OutputChannel | undefined;
 let bridgeServer: BridgeServer | undefined;
+let bridgeRefreshTimer: NodeJS.Timeout | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel('dcmview');
@@ -98,6 +108,7 @@ export function activate(context: vscode.ExtensionContext): void {
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void configureTerminalInterception(context);
     }),
+    { dispose: () => stopBridgeRegistryRefresh() },
     { dispose: () => void stopBridge() },
   );
 
@@ -592,6 +603,7 @@ async function configureTerminalInterception(context: vscode.ExtensionContext): 
     const bridge = await ensureBridge(context);
     const registryDir = bridgeRegistryDirectory();
     await writeBridgeRegistry(bridge, registryDir);
+    startBridgeRegistryRefresh(bridge, registryDir);
     const shimDir = await ensureShimDirectory(context, binary);
 
     env.description = 'Routes dcmview terminal commands into the VS Code dcmview viewer.';
@@ -645,6 +657,7 @@ async function stopBridge(): Promise<void> {
     return;
   }
 
+  stopBridgeRegistryRefresh();
   if (bridge.registryPath) {
     await fs.promises.unlink(bridge.registryPath).catch(() => undefined);
   }
@@ -652,6 +665,23 @@ async function stopBridge(): Promise<void> {
   await new Promise<void>((resolve) => {
     bridge.server.close(() => resolve());
   });
+}
+
+function startBridgeRegistryRefresh(bridge: BridgeServer, registryDir: string): void {
+  stopBridgeRegistryRefresh();
+  bridgeRefreshTimer = setInterval(() => {
+    void writeBridgeRegistry(bridge, registryDir).catch((error) => {
+      getOutputChannel().appendLine(`dcmview bridge registry refresh failed: ${formatError(error)}`);
+    });
+  }, BRIDGE_REGISTRY_REFRESH_MS);
+  bridgeRefreshTimer.unref?.();
+}
+
+function stopBridgeRegistryRefresh(): void {
+  if (bridgeRefreshTimer) {
+    clearInterval(bridgeRefreshTimer);
+    bridgeRefreshTimer = undefined;
+  }
 }
 
 async function handleBridgeRequest(
@@ -799,20 +829,78 @@ export function bridgeRegistryDirectory(
   return path.join(tmpDir, `dcmview-vscode-bridges-${safeRegistrySegment(user)}`);
 }
 
-function safeRegistrySegment(value: string): string {
+export function safeRegistrySegment(value: string): string {
   return value.replace(/[^A-Za-z0-9_.-]/g, '_');
 }
 
-async function writeBridgeRegistry(bridge: BridgeServer, registryDir: string): Promise<void> {
+export function isExpiredRegistryEntry(createdAtMs: number, nowMs: number): boolean {
+  return (
+    createdAtMs <= 0 ||
+    createdAtMs > nowMs + BRIDGE_REGISTRY_MAX_AGE_MS ||
+    nowMs - createdAtMs > BRIDGE_REGISTRY_MAX_AGE_MS
+  );
+}
+
+export function orderBridgeRegistryEndpoints(
+  cwd: string,
+  entries: BridgeRegistryEntry[],
+  requireWorkspace: boolean,
+  nowMs = Date.now(),
+): string[][] {
+  const normalizedCwd = path.resolve(cwd);
+  const candidates = entries
+    .filter((entry) => !isExpiredRegistryEntry(entry.createdAtMs, nowMs))
+    .map((entry) => ({
+      score: workspaceMatchScore(normalizedCwd, entry.workspaceRoots),
+      createdAtMs: entry.createdAtMs,
+      endpoint: [entry.bridgeUrl, entry.token],
+    }))
+    .filter((candidate) => !requireWorkspace || candidate.score > 0)
+    .sort((left, right) => right.score - left.score || right.createdAtMs - left.createdAtMs);
+
+  const seen = new Set<string>();
+  const endpoints: string[][] = [];
+  for (const candidate of candidates) {
+    const key = `${candidate.endpoint[0]}\0${candidate.endpoint[1]}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      endpoints.push(candidate.endpoint);
+    }
+  }
+  return endpoints;
+}
+
+function workspaceMatchScore(cwd: string, workspaceRoots: readonly string[]): number {
+  let best = 0;
+  for (const root of workspaceRoots) {
+    const normalizedRoot = path.resolve(root);
+    const relative = path.relative(normalizedRoot, cwd);
+    if (relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))) {
+      best = Math.max(best, normalizedRoot.length);
+    }
+  }
+  return best;
+}
+
+export async function writeBridgeRegistry(
+  bridge: WritableBridgeRegistry,
+  registryDir: string,
+  roots: string[] = workspaceRoots(),
+  createdAtMs = Date.now(),
+): Promise<string> {
   await fs.promises.mkdir(registryDir, { recursive: true, mode: 0o700 });
   if (process.platform !== 'win32') {
     await fs.promises.chmod(registryDir, 0o700);
+  }
+  const stats = await fs.promises.stat(registryDir);
+  if (!registryDirectoryIsTrusted(stats)) {
+    throw new Error(`Refusing to publish dcmview bridge registry in untrusted directory: ${registryDir}`);
   }
 
   const registryPath = path.join(registryDir, `${bridge.id}.json`);
   const previousRegistryPath = bridge.registryPath;
   const tempPath = `${registryPath}.${process.pid}.tmp`;
-  const payload = JSON.stringify(bridgeRegistryEntry(bridge, workspaceRoots()), null, 2);
+  const payload = JSON.stringify(bridgeRegistryEntry(bridge, roots, createdAtMs), null, 2);
   await fs.promises.writeFile(tempPath, payload, { encoding: 'utf8', mode: 0o600 });
   if (process.platform !== 'win32') {
     await fs.promises.chmod(tempPath, 0o600);
@@ -822,6 +910,14 @@ async function writeBridgeRegistry(bridge: BridgeServer, registryDir: string): P
   if (previousRegistryPath && previousRegistryPath !== registryPath) {
     await fs.promises.unlink(previousRegistryPath).catch(() => undefined);
   }
+  return registryPath;
+}
+
+export function registryDirectoryIsTrusted(stats: Pick<fs.Stats, 'uid' | 'mode'>): boolean {
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    return true;
+  }
+  return stats.uid === process.getuid() && (stats.mode & 0o022) === 0;
 }
 
 export function bridgeRegistryEntry(
