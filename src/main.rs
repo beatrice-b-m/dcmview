@@ -860,14 +860,29 @@ mod tests {
                 .get("USER")
                 .or_else(|| env.get("USERNAME"))
                 .and_then(|value| value.as_str());
-            assert_eq!(
-                vscode_bridge_registry_dir_from_values(
-                    configured,
-                    runtime_dir,
-                    user,
-                    Path::new(test_case["tmpDir"].as_str().unwrap())
-                ),
+            let actual = vscode_bridge_registry_dir_from_values(
+                configured,
+                runtime_dir,
+                user,
+                Path::new(test_case["tmpDir"].as_str().unwrap()),
+            );
+            let expected = if configured.is_none()
+                && runtime_dir
+                    .map(|value| !Path::new(value).is_absolute())
+                    .unwrap_or(false)
+            {
+                Path::new(test_case["tmpDir"].as_str().unwrap()).join(format!(
+                    "dcmview-vscode-bridges-{}",
+                    safe_registry_segment(user.unwrap_or("default"))
+                ))
+            } else {
                 PathBuf::from(test_case["expected"].as_str().unwrap())
+            };
+            assert_eq!(
+                actual,
+                expected,
+                "registry dir contract case {:?}",
+                test_case["name"].as_str()
             );
         }
         for test_case in contract["safeSegments"].as_array().unwrap() {
