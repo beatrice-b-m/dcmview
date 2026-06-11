@@ -8,6 +8,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -22,6 +23,7 @@ _VSCODE_BRIDGE_URL_ENV = "DCMVIEW_VSCODE_BRIDGE_URL"
 _VSCODE_BRIDGE_TOKEN_ENV = "DCMVIEW_VSCODE_BRIDGE_TOKEN"
 _VSCODE_BRIDGE_BYPASS_ENV = "DCMVIEW_VSCODE_BYPASS"
 _VSCODE_BRIDGE_REGISTRY_DIR_ENV = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR"
+_BRIDGE_REGISTRY_MAX_AGE_SECONDS = 12 * 60 * 60
 
 PathInput = Union[str, os.PathLike[str]]
 
@@ -254,7 +256,11 @@ def _view_via_vscode_bridge(
 			response = _bridge_json_request("POST", "/launch", payload, endpoint=candidate)
 			endpoint = candidate
 			break
+		except urllib.error.HTTPError as error:
+			last_error = error
 		except (OSError, urllib.error.URLError, RuntimeError) as error:
+			if isinstance(error, urllib.error.URLError):
+				_remove_bridge_registry_endpoint(candidate)
 			last_error = error
 	if response is None or endpoint is None:
 		if last_error is not None:
@@ -419,13 +425,15 @@ def _bridge_endpoints() -> list[BridgeEndpoint]:
 	return _bridge_registry_endpoints(os.getcwd())
 
 
-def _bridge_registry_endpoints(cwd: str) -> list[BridgeEndpoint]:
+def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> list[BridgeEndpoint]:
 	registry_dir = Path(_bridge_registry_dir())
 	try:
 		paths = list(registry_dir.glob("*.json"))
 	except OSError:
 		return []
 
+	if now_ms is None:
+		now_ms = int(time.time() * 1000)
 	cwd_path = _normalized_path(cwd)
 	candidates: list[tuple[int, int, BridgeEndpoint]] = []
 	for path in paths:
@@ -439,13 +447,18 @@ def _bridge_registry_endpoints(cwd: str) -> list[BridgeEndpoint]:
 		token = entry.get("token")
 		if not isinstance(url, str) or not url or not isinstance(token, str) or not token:
 			continue
+		created_at = entry.get("createdAtMs")
+		if not isinstance(created_at, int):
+			_remove_registry_file(path)
+			continue
+		if _is_expired_registry_entry(created_at, now_ms):
+			_remove_registry_file(path)
+			continue
 		workspace_roots = entry.get("workspaceRoots")
 		if not isinstance(workspace_roots, list):
 			workspace_roots = []
 		match_score = _workspace_match_score(cwd_path, workspace_roots)
-		created_at = entry.get("createdAtMs")
-		created_score = int(created_at) if isinstance(created_at, int) else 0
-		candidates.append((match_score, created_score, (url, token)))
+		candidates.append((match_score, created_at, (url, token)))
 
 	candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
 	endpoints: list[BridgeEndpoint] = []
@@ -455,6 +468,37 @@ def _bridge_registry_endpoints(cwd: str) -> list[BridgeEndpoint]:
 			endpoints.append(endpoint)
 			seen.add(endpoint)
 	return endpoints
+
+
+def _is_expired_registry_entry(created_at_ms: int, now_ms: int) -> bool:
+	max_age_ms = _BRIDGE_REGISTRY_MAX_AGE_SECONDS * 1000
+	return created_at_ms <= 0 or created_at_ms > now_ms + max_age_ms or now_ms - created_at_ms > max_age_ms
+
+
+def _remove_registry_file(path: Path) -> None:
+	try:
+		path.unlink()
+	except OSError:
+		pass
+
+
+def _remove_bridge_registry_endpoint(endpoint: BridgeEndpoint) -> None:
+	registry_dir = Path(_bridge_registry_dir())
+	try:
+		paths = list(registry_dir.glob("*.json"))
+	except OSError:
+		return
+	for path in paths:
+		try:
+			entry = json.loads(path.read_text(encoding="utf-8"))
+		except (OSError, json.JSONDecodeError):
+			continue
+		if (
+			isinstance(entry, dict)
+			and entry.get("bridgeUrl") == endpoint[0]
+			and entry.get("token") == endpoint[1]
+		):
+			_remove_registry_file(path)
 
 
 def _bridge_registry_dir() -> str:
@@ -553,11 +597,14 @@ def _is_windows() -> bool:
 
 
 def _popen_options() -> dict[str, object]:
+	env = dict(os.environ)
+	env[_VSCODE_BRIDGE_BYPASS_ENV] = "1"
 	options: dict[str, object] = {
 		"stdout": subprocess.PIPE,
 		"stderr": subprocess.STDOUT,
 		"text": True,
 		"bufsize": 1,
+		"env": env,
 	}
 	if _is_windows():
 		options["creationflags"] = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)

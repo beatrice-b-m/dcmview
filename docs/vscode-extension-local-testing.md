@@ -27,10 +27,12 @@ terminals. Open a fresh terminal after the Extension Development Host starts so
 the terminal receives the bridge environment.
 
 The bridge is also published through a short-lived registry file on the remote
-host so direct `dcmview` binaries and `dcmview_py.view(...)` calls from VS Code
-Jupyter kernels can route into the VS Code webview even when they did not
-inherit the integrated-terminal environment. Set
-`DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing custom registry locations.
+host so direct `dcmview` binaries launched inside the active workspace and
+`dcmview_py.view(...)` calls from VS Code Jupyter kernels can route into the VS
+Code webview even when they did not inherit the integrated-terminal environment.
+Registry entries expire after 12 hours so crash leftovers do not affect future
+sessions indefinitely. Set `DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing
+custom registry locations.
 
 ## Run in an Extension Development Host
 

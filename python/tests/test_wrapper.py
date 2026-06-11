@@ -142,6 +142,13 @@ class WrapperTests(unittest.TestCase):
 
 		self.assertEqual(options["creationflags"], 512)
 
+	def test_local_subprocess_launch_sets_bridge_bypass(self) -> None:
+		with mock.patch.dict(os.environ, {"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567"}, clear=True):
+			options = wrapper._popen_options()
+
+		self.assertEqual(options["env"]["DCMVIEW_VSCODE_BYPASS"], "1")
+		self.assertEqual(options["env"]["DCMVIEW_VSCODE_BRIDGE_URL"], "http://127.0.0.1:4567")
+
 	def test_windows_shutdown_uses_ctrl_break_event(self) -> None:
 		process = mock.Mock()
 		process.poll.return_value = None
@@ -473,6 +480,7 @@ class WrapperTests(unittest.TestCase):
 	def test_bridge_registry_endpoints_prefer_matching_workspace_then_newest(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			registry = Path(tmp)
+			now_ms = 100_000
 			(registry / "old.json").write_text(
 				json.dumps(
 					{
@@ -481,7 +489,7 @@ class WrapperTests(unittest.TestCase):
 						"bridgeUrl": "http://127.0.0.1:1111",
 						"token": "old-token",
 						"workspaceRoots": ["/elsewhere"],
-						"createdAtMs": 999,
+						"createdAtMs": now_ms,
 					}
 				),
 				encoding="utf-8",
@@ -494,7 +502,7 @@ class WrapperTests(unittest.TestCase):
 						"bridgeUrl": "http://127.0.0.1:2222",
 						"token": "match-token",
 						"workspaceRoots": [str(REPO_ROOT)],
-						"createdAtMs": 1,
+						"createdAtMs": now_ms - 1,
 					}
 				),
 				encoding="utf-8",
@@ -505,7 +513,7 @@ class WrapperTests(unittest.TestCase):
 				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
 				clear=True,
 			):
-				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT / "tests"))
+				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT / "tests"), now_ms=now_ms)
 
 		self.assertEqual(endpoints[0], ("http://127.0.0.1:2222", "match-token"))
 		self.assertEqual(endpoints[1], ("http://127.0.0.1:1111", "old-token"))
@@ -513,6 +521,7 @@ class WrapperTests(unittest.TestCase):
 	def test_bridge_registry_discovery_ignores_invalid_entries(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			registry = Path(tmp)
+			now_ms = 100_000
 			(registry / "invalid.json").write_text("{", encoding="utf-8")
 			(registry / "missing-token.json").write_text(
 				json.dumps({"bridgeUrl": "http://127.0.0.1:1111"}),
@@ -524,7 +533,7 @@ class WrapperTests(unittest.TestCase):
 						"bridgeUrl": "http://127.0.0.1:3333",
 						"token": "valid-token",
 						"workspaceRoots": [],
-						"createdAtMs": 7,
+						"createdAtMs": now_ms,
 					}
 				),
 				encoding="utf-8",
@@ -535,9 +544,76 @@ class WrapperTests(unittest.TestCase):
 				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
 				clear=True,
 			):
-				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT))
+				endpoints = wrapper._bridge_registry_endpoints(str(REPO_ROOT), now_ms=now_ms)
 
 		self.assertEqual(endpoints, [("http://127.0.0.1:3333", "valid-token")])
+
+	def test_bridge_registry_discovery_removes_expired_entries(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			expired = registry / "expired.json"
+			expired.write_text(
+				json.dumps(
+					{
+						"bridgeUrl": "http://127.0.0.1:3333",
+						"token": "expired-token",
+						"workspaceRoots": [],
+						"createdAtMs": 1,
+					}
+				),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_registry_endpoints(
+					str(REPO_ROOT),
+					now_ms=wrapper._BRIDGE_REGISTRY_MAX_AGE_SECONDS * 1000 + 2,
+				)
+
+			self.assertEqual(endpoints, [])
+			self.assertFalse(expired.exists())
+
+	def test_remove_bridge_registry_endpoint_deletes_matching_entries_only(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			stale = registry / "stale.json"
+			live = registry / "live.json"
+			stale.write_text(
+				json.dumps(
+					{
+						"bridgeUrl": "http://127.0.0.1:1111",
+						"token": "stale-token",
+						"workspaceRoots": [],
+						"createdAtMs": 100_000,
+					}
+				),
+				encoding="utf-8",
+			)
+			live.write_text(
+				json.dumps(
+					{
+						"bridgeUrl": "http://127.0.0.1:2222",
+						"token": "live-token",
+						"workspaceRoots": [],
+						"createdAtMs": 100_000,
+					}
+				),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry)},
+				clear=True,
+			):
+				wrapper._remove_bridge_registry_endpoint(("http://127.0.0.1:1111", "stale-token"))
+
+			self.assertFalse(stale.exists())
+			self.assertTrue(live.exists())
 
 	def test_view_tries_next_registry_bridge_after_stale_entry(self) -> None:
 		endpoints = [

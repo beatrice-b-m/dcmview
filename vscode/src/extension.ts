@@ -95,6 +95,9 @@ export function activate(context: vscode.ExtensionContext): void {
         void configureTerminalInterception(context);
       }
     }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => {
+      void configureTerminalInterception(context);
+    }),
     { dispose: () => void stopBridge() },
   );
 
