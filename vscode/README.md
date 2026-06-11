@@ -1,4 +1,4 @@
-![dcmview](media/dcmview-wordmark-darkmode-opaque-background.png)
+![dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/main/dcmview-wordmark-darkmode-opaque-background.png)
 
 # dcmview
 
