@@ -151,18 +151,16 @@ async fn serves_js_and_css_assets_with_correct_mime_types() {
     // Discover actual asset filenames from the index.html body
     let index_body = test_server.get("/").await.text();
 
-    // Extract JS asset path from: src="/assets/index-XXXX.js"
     let js_path = index_body
         .split("src=\"/assets/")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
+        .filter_map(|s| s.split('"').next())
+        .find(|path| path.ends_with(".js"))
         .expect("JS asset referenced in index.html");
 
-    // Extract CSS asset path from: href="/assets/index-XXXX.css"
     let css_path = index_body
         .split("href=\"/assets/")
-        .nth(1)
-        .and_then(|s| s.split('"').next())
+        .filter_map(|s| s.split('"').next())
+        .find(|path| path.ends_with(".css"))
         .expect("CSS asset referenced in index.html");
 
     let js_response = test_server.get(&format!("/assets/{js_path}")).await;
