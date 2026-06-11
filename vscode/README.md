@@ -1,3 +1,5 @@
+![dcmview](media/dcmview-wordmark-darkmode-opaque-background.png)
+
 # dcmview
 
 Open local DICOM files and folders in `dcmview` directly from VS Code.
@@ -44,4 +46,3 @@ integration for a single shell session.
 - `dcmview.startupTimeoutSeconds`: seconds to wait for startup.
 - `dcmview.terminalInterception.enabled`: route integrated terminal launches
   into VS Code webviews.
-

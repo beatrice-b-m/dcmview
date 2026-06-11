@@ -5,6 +5,11 @@
   "version": "0.2.2",
   "publisher": "beatricebm",
   "license": "MIT",
+  "icon": "media/dcmview-icon.png",
+  "galleryBanner": {
+    "color": "#0f172a",
+    "theme": "dark"
+  },
   "homepage": "https://github.com/beatrice-b-m/dcmview",
   "bugs": {
     "url": "https://github.com/beatrice-b-m/dcmview/issues"

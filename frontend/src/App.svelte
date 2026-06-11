@@ -335,7 +335,7 @@
 		style={`--file-nav-width:${fileNavigatorWidthPx}px; --tag-panel-width:${tagPanelWidth}px;`}
 	>
 		<header class="topbar">
-			<div class="title">dcmview</div>
+			<img class="brand-mark" src="/assets/dcmview-logo.svg" alt="dcmview" />
 			<OpenImageTabs
 				files={filesResponse.files}
 				openTabs={openTabIndexes}
@@ -496,13 +496,12 @@
 		border-bottom: 1px solid var(--border-subtle);
 	}
 
-	.title {
+	.brand-mark {
 		align-self: center;
-		color: var(--text-secondary);
-		font-size: 0.82rem;
-		font-weight: 650;
-		letter-spacing: 0.01em;
-		white-space: nowrap;
+		display: block;
+		width: 1.55rem;
+		height: 1.55rem;
+		border-radius: 0.28rem;
 	}
 
 	.workspace {
@@ -634,7 +633,7 @@
 			padding-top: 0.35rem;
 		}
 
-		.title {
+		.brand-mark {
 			display: none;
 		}
 

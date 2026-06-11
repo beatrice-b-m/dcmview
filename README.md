@@ -1,3 +1,5 @@
+![dcmview](https://raw.githubusercontent.com/beatrice-b-m/dcmview/main/dcmview-wordmark-darkmode-opaque-background.png)
+
 # dcmview
 
 `dcmview` is a fast, temporary DICOM viewer for research and development work.
