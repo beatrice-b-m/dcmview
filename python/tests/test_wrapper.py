@@ -454,6 +454,41 @@ class WrapperTests(unittest.TestCase):
 		self.assertIn(str(FIXTURE_FILE), launch_payload["args"])
 		self.assertFalse(launch_payload["wait"])
 		self.assertEqual(launch_payload["binaryPath"], "/tmp/dcmview")
+		self.assertIsNone(bridge_mock.call_args_list[1].kwargs["timeout"])
+
+	def test_view_does_not_fallback_after_bridge_launch_is_captured(self) -> None:
+		def fake_bridge_request(method, path, payload=None, *, endpoint=None, timeout=5.0):
+			if method == "POST" and path == "/launch":
+				self.assertEqual(timeout, 5.0)
+				return {"sessionId": "abc", "url": "http://127.0.0.1:9999"}
+			if method == "GET" and path == "/sessions/abc/wait":
+				self.assertIsNone(timeout)
+				raise TimeoutError("timed out")
+			raise AssertionError(f"unexpected bridge request {method} {path}")
+
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": "secret",
+			},
+			clear=True,
+		):
+			with mock.patch("dcmview_py.wrapper._bridge_json_request", side_effect=fake_bridge_request):
+				with mock.patch("dcmview_py.wrapper._resolve_binary", return_value="/tmp/dcmview"):
+					with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+						stdout = StringIO()
+						stderr = StringIO()
+						with redirect_stdout(stdout), mock.patch("sys.stderr", stderr):
+							with self.assertRaisesRegex(
+								RuntimeError,
+								"VS Code bridge session was captured but wait failed",
+							):
+								wrapper.view([FIXTURE_FILE], browser=True, block=True)
+
+		popen_mock.assert_not_called()
+		self.assertIn("dcmview: opened in VS Code at http://127.0.0.1:9999", stdout.getvalue())
+		self.assertNotIn("VS Code bridge unavailable", stderr.getvalue())
 
 	def test_view_omits_bridge_binary_path_when_resolution_fails(self) -> None:
 		with mock.patch.dict(

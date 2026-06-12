@@ -287,7 +287,6 @@ async fn run_vscode_bridge_launch(
     bridge_endpoints: &[BridgeEndpoint],
 ) -> Result<i32> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(5))
         .build()
         .context("failed to create VS Code bridge HTTP client")?;
     let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -307,7 +306,17 @@ async fn run_vscode_bridge_launch(
     for endpoint in bridge_endpoints {
         match launch_vscode_session(&client, endpoint, &launch).await {
             Ok(launch_response) => {
-                return wait_for_launched_vscode_session(&client, endpoint, launch_response).await;
+                return match wait_for_launched_vscode_session(&client, endpoint, launch_response)
+                    .await
+                {
+                    Ok(exit_code) => Ok(exit_code),
+                    Err(error) => {
+                        eprintln!(
+                            "dcmview: VS Code bridge session was captured but wait failed: {error}"
+                        );
+                        Ok(1)
+                    }
+                };
             }
             Err(error) => {
                 if should_remove_registry_entry_after_launch_error(
@@ -336,6 +345,7 @@ async fn launch_vscode_session(
         .post(launch_url)
         .bearer_auth(&endpoint.token)
         .json(launch)
+        .timeout(Duration::from_secs(5))
         .send()
         .await
     {
@@ -414,12 +424,22 @@ async fn wait_for_launched_vscode_session(
         wait_result = wait_for_vscode_session(client, &wait_url, &endpoint.token) => wait_result,
         signal_result = ctrl_c => {
             signal_result.context("failed to listen for Ctrl+C")?;
-            let _ = client.post(stop_url).bearer_auth(&endpoint.token).send().await;
+            let _ = client
+                .post(stop_url)
+                .bearer_auth(&endpoint.token)
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
             Ok(130)
         },
         signal_result = ctrl_break => {
             signal_result?;
-            let _ = client.post(stop_url).bearer_auth(&endpoint.token).send().await;
+            let _ = client
+                .post(stop_url)
+                .bearer_auth(&endpoint.token)
+                .timeout(Duration::from_secs(5))
+                .send()
+                .await;
             Ok(130)
         }
     }

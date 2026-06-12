@@ -133,6 +133,10 @@ class ShutdownHandle:
 BridgeEndpoint = tuple[str, str]
 
 
+class _BridgeSessionWaitError(RuntimeError):
+	pass
+
+
 class BridgeShutdownHandle:
 	"""Handle for controlling a VS Code-managed dcmview session."""
 
@@ -196,6 +200,8 @@ def view(
 		try:
 			return _view_via_vscode_bridge(args, block=block, endpoints=bridge_endpoints)
 		except (RuntimeError, OSError, urllib.error.URLError) as error:
+			if isinstance(error, _BridgeSessionWaitError):
+				raise
 			print(
 				f"dcmview: VS Code bridge unavailable ({error}); falling back to local viewer",
 				file=sys.stderr,
@@ -285,7 +291,15 @@ def _view_via_vscode_bridge(
 	if not block:
 		return BridgeShutdownHandle(session_id, url, endpoint)
 
-	wait_response = _bridge_json_request("GET", f"/sessions/{session_id}/wait", endpoint=endpoint)
+	try:
+		wait_response = _bridge_json_request(
+			"GET",
+			f"/sessions/{session_id}/wait",
+			endpoint=endpoint,
+			timeout=None,
+		)
+	except (RuntimeError, OSError, urllib.error.URLError) as error:
+		raise _BridgeSessionWaitError(f"VS Code bridge session was captured but wait failed: {error}") from error
 	exit_code = int(wait_response.get("exitCode") or 0)
 	if exit_code != 0:
 		raise subprocess.CalledProcessError(exit_code, ["dcmview-vscode-bridge", *args])
@@ -691,7 +705,7 @@ def _bridge_json_request(
 	payload: Optional[dict[str, object]] = None,
 	*,
 	endpoint: Optional[BridgeEndpoint] = None,
-	timeout: float = _STOP_TIMEOUT_SECONDS,
+	timeout: Optional[float] = _STOP_TIMEOUT_SECONDS,
 ) -> dict[str, object]:
 	if endpoint is None:
 		endpoints = _bridge_endpoints()
