@@ -53,6 +53,44 @@ def get_json(url: str) -> dict:
 		return json.load(response)
 
 
+def wait_for_files(base_url: str, expected_count: int, timeout: float) -> dict:
+	deadline = time.monotonic() + timeout
+	last_payload: dict | None = None
+	last_error: Exception | None = None
+
+	while time.monotonic() < deadline:
+		try:
+			payload = get_json(f"{base_url}/api/files")
+			entries = payload.get("files", [])
+			last_payload = payload
+			last_error = None
+
+			if len(entries) == expected_count:
+				return payload
+			if payload.get("scan_complete"):
+				raise AssertionError(
+					f"expected {expected_count} files, got {len(entries)} after scan completed "
+					f"(scanned={payload.get('scanned')}, skipped={payload.get('skipped')}, "
+					f"filtered={payload.get('filtered')})"
+				)
+		except urllib.error.URLError as error:
+			last_error = error
+
+		time.sleep(0.1)
+
+	if last_payload is not None:
+		entries = last_payload.get("files", [])
+		raise RuntimeError(
+			f"timed out waiting for {expected_count} files; last response had {len(entries)} "
+			f"(scan_complete={last_payload.get('scan_complete')}, "
+			f"scanned={last_payload.get('scanned')}, skipped={last_payload.get('skipped')}, "
+			f"filtered={last_payload.get('filtered')})"
+		)
+	if last_error is not None:
+		raise RuntimeError(f"timed out waiting for /api/files: {last_error}")
+	raise RuntimeError("timed out waiting for /api/files")
+
+
 def get_response(url: str) -> tuple[int, dict[str, str], bytes]:
 	request = urllib.request.Request(url)
 	try:
@@ -117,7 +155,7 @@ def main() -> int:
 
 	try:
 		base_url = monitor.wait_for_url(20.0)
-		files = get_json(f"{base_url}/api/files")
+		files = wait_for_files(base_url, 2, 20.0)
 		entries = files["files"]
 		expect(len(entries) == 2, f"expected 2 files, got {len(entries)}")
 
