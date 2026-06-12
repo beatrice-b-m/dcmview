@@ -42,6 +42,7 @@ export interface FilesResponse {
 	scan_complete: boolean;
 	scanned: number;
 	skipped: number;
+	filtered: number;
 }
 
 export interface FrameInfo {

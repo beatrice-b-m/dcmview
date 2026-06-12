@@ -120,6 +120,7 @@ pub struct FilesResponse {
     pub scan_complete: bool,
     pub scanned: usize,
     pub skipped: usize,
+    pub filtered: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

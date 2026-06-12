@@ -660,7 +660,9 @@ fn spawn_progressive_discovery(
                 loader::DiscoveryEvent::Skipped => {
                     registry.record_skipped();
                 }
-                loader::DiscoveryEvent::Filtered => {}
+                loader::DiscoveryEvent::Filtered => {
+                    registry.record_filtered();
+                }
             }
         }
 

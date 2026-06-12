@@ -22,11 +22,12 @@ use dicom_object::{open_file, InMemDicomObject};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::pin::pin;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
-use tokio::sync::Notify;
+use tokio::sync::{futures::Notified, Notify};
 
 #[derive(Clone)]
 pub struct AppState {
@@ -47,6 +48,7 @@ pub struct FileRegistry {
     inner: Arc<RwLock<FileRegistryInner>>,
     scanned: Arc<AtomicUsize>,
     skipped: Arc<AtomicUsize>,
+    filtered: Arc<AtomicUsize>,
     scan_complete: Arc<AtomicBool>,
     notify: Arc<Notify>,
 }
@@ -62,6 +64,7 @@ pub struct RegistryStatus {
     pub file_count: usize,
     pub scanned: usize,
     pub skipped: usize,
+    pub filtered: usize,
     pub scan_complete: bool,
 }
 
@@ -71,6 +74,7 @@ impl FileRegistry {
             inner: Arc::new(RwLock::new(FileRegistryInner::default())),
             scanned: Arc::new(AtomicUsize::new(0)),
             skipped: Arc::new(AtomicUsize::new(0)),
+            filtered: Arc::new(AtomicUsize::new(0)),
             scan_complete: Arc::new(AtomicBool::new(false)),
             notify: Arc::new(Notify::new()),
         }
@@ -106,13 +110,17 @@ impl FileRegistry {
         self.skipped.fetch_add(1, Ordering::Relaxed);
     }
 
+    pub fn record_filtered(&self) {
+        self.filtered.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub fn mark_scan_complete(&self) {
         self.scan_complete.store(true, Ordering::Relaxed);
         self.notify.notify_waiters();
     }
 
-    pub async fn changed(&self) {
-        self.notify.notified().await;
+    pub fn changed(&self) -> Notified<'_> {
+        self.notify.notified()
     }
 
     pub fn get(&self, index: usize) -> Option<FileEntry> {
@@ -151,6 +159,7 @@ impl FileRegistry {
             file_count,
             scanned: self.scanned.load(Ordering::Relaxed),
             skipped: self.skipped.load(Ordering::Relaxed),
+            filtered: self.filtered.load(Ordering::Relaxed),
             scan_complete: self.scan_complete.load(Ordering::Relaxed),
         }
     }
@@ -264,6 +273,7 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
         spawn_idle_timeout_watcher(
             timeout,
             state.last_request.clone(),
+            state.registry.clone(),
             state.tunnel_handle.clone(),
         );
     }
@@ -342,6 +352,7 @@ async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
         scan_complete: status.scan_complete,
         scanned: status.scanned,
         skipped: status.skipped,
+        filtered: status.filtered,
     })
 }
 
@@ -801,11 +812,16 @@ fn touch_request(state: &AppState) {
 fn spawn_idle_timeout_watcher(
     timeout_seconds: u64,
     last_request: Arc<AtomicU64>,
+    registry: FileRegistry,
     tunnel_handle: Option<Arc<TunnelHandle>>,
 ) {
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(Duration::from_secs(1)).await;
+            let status = registry.status();
+            if !status.scan_complete && status.file_count == 0 {
+                continue;
+            }
             let now = now_unix_ms();
             let last = last_request.load(Ordering::Relaxed);
             if last > 0 && now.saturating_sub(last) >= timeout_seconds * 1_000 {
@@ -822,6 +838,9 @@ fn spawn_idle_timeout_watcher(
 fn spawn_browser_opener(server_url: String, registry: FileRegistry) {
     tokio::spawn(async move {
         loop {
+            let changed = registry.changed();
+            let mut changed = pin!(changed);
+            changed.as_mut().enable();
             let status = registry.status();
             if status.file_count > 0 {
                 if let Err(error) = open::that(&server_url) {
@@ -832,7 +851,7 @@ fn spawn_browser_opener(server_url: String, registry: FileRegistry) {
             if status.scan_complete {
                 return;
             }
-            registry.changed().await;
+            changed.await;
         }
     });
 }
