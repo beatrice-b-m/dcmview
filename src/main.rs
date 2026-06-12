@@ -692,15 +692,15 @@ fn vscode_bridge_registry_dir_from_values(
     }
 
     if let Some(state_home) = state_home {
-        let state_home = PathBuf::from(state_home);
-        if registry_env_path_is_absolute(&state_home) {
+        if registry_env_path_is_absolute(state_home) {
+            let state_home = PathBuf::from(state_home);
             return state_home.join("dcmview").join("vscode-bridges");
         }
     }
 
     if let Some(home) = home {
-        let home = PathBuf::from(home);
-        if registry_env_path_is_absolute(&home) {
+        if registry_env_path_is_absolute(home) {
+            let home = PathBuf::from(home);
             return home
                 .join(".local")
                 .join("state")
@@ -710,8 +710,8 @@ fn vscode_bridge_registry_dir_from_values(
     }
 
     if let Some(user_profile) = user_profile {
-        let user_profile = PathBuf::from(user_profile);
-        if registry_env_path_is_absolute(&user_profile) {
+        if registry_env_path_is_absolute(user_profile) {
+            let user_profile = PathBuf::from(user_profile);
             return user_profile
                 .join(".local")
                 .join("state")
@@ -734,8 +734,8 @@ fn legacy_vscode_bridge_registry_dirs_from_values(
 ) -> Vec<PathBuf> {
     let mut dirs = Vec::new();
     if let Some(runtime_dir) = runtime_dir {
-        let runtime_dir = PathBuf::from(runtime_dir);
-        if registry_env_path_is_absolute(&runtime_dir) {
+        if registry_env_path_is_absolute(runtime_dir) {
+            let runtime_dir = PathBuf::from(runtime_dir);
             dirs.push(runtime_dir.join("dcmview").join("vscode-bridges"));
         }
     }
@@ -748,8 +748,11 @@ fn legacy_vscode_bridge_registry_dirs_from_values(
     dirs
 }
 
-fn registry_env_path_is_absolute(path: &Path) -> bool {
-    path.is_absolute() || path.has_root()
+fn registry_env_path_is_absolute(path: &str) -> bool {
+    Path::new(path).is_absolute()
+        || path.starts_with('/')
+        || path.starts_with('\\')
+        || path.as_bytes().get(1) == Some(&b':')
 }
 
 fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {

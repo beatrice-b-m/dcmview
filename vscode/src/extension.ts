@@ -1015,8 +1015,23 @@ export function bridgeRegistryDirectory(
     return path.join(stateHome, 'dcmview', 'vscode-bridges');
   }
 
-  const home = env.HOME || os.homedir();
-  return path.join(home, '.local', 'state', 'dcmview', 'vscode-bridges');
+  const home = env.HOME;
+  if (home && path.isAbsolute(home)) {
+    return path.join(home, '.local', 'state', 'dcmview', 'vscode-bridges');
+  }
+
+  const userProfile = env.USERPROFILE;
+  if (userProfile && path.isAbsolute(userProfile)) {
+    return path.join(userProfile, '.local', 'state', 'dcmview', 'vscode-bridges');
+  }
+
+  if (env !== process.env) {
+    return path.join('.', '.local', 'state', 'dcmview', 'vscode-bridges');
+  }
+
+  const fallbackHome = os.homedir();
+  const homePath = fallbackHome && path.isAbsolute(fallbackHome) ? fallbackHome : '.';
+  return path.join(homePath, '.local', 'state', 'dcmview', 'vscode-bridges');
 }
 
 export function safeRegistrySegment(value: string): string {
