@@ -48,6 +48,7 @@
 
 	const LARGE_TREE_COLLAPSE_THRESHOLD = 500;
 	let collapsedNodes = $state<Record<string, boolean>>({});
+	let filterQuery = $state("");
 
 	function clean(value: string | null | undefined): string {
 		return (value ?? "").trim();
@@ -84,6 +85,9 @@
 	}
 
 	function defaultCollapsed(key: string): boolean {
+		if (filterActive) {
+			return false;
+		}
 		if (files.length <= LARGE_TREE_COLLAPSE_THRESHOLD || tree.length <= 1) {
 			return false;
 		}
@@ -188,6 +192,48 @@
 		return [detail, ...counts].filter(Boolean).join(" · ");
 	}
 
+	function searchableValues(file: FileSummary, scope: string | null): string[] {
+		switch (scope) {
+			case "patient":
+				return [file.patient_id, file.patient_name];
+			case "study":
+				return [file.study_description, file.study_date, file.study_instance_uid];
+			case "series":
+				return [file.series_description, file.series_number, file.series_instance_uid];
+			case "modality":
+				return [file.modality];
+			default:
+				return [
+					file.patient_id,
+					file.patient_name,
+					file.study_description,
+					file.study_date,
+					file.study_instance_uid,
+					file.series_description,
+					file.series_number,
+					file.series_instance_uid,
+					file.modality,
+				];
+		}
+	}
+
+	function fileMatchesTerm(file: FileSummary, rawTerm: string): boolean {
+		const trimmed = clean(rawTerm);
+		if (!trimmed) return true;
+
+		const scoped = trimmed.match(/^(patient|study|series|modality):(.+)$/i);
+		const scope = scoped?.[1].toLowerCase() ?? null;
+		const needle = (scoped?.[2] ?? trimmed).trim().toLowerCase();
+		if (!needle) return true;
+
+		return searchableValues(file, scope).some((value) => clean(value).toLowerCase().includes(needle));
+	}
+
+	function fileMatchesFilter(file: FileSummary, query: string): boolean {
+		const terms = clean(query).split(/\s+/).filter(Boolean);
+		return terms.every((term) => fileMatchesTerm(file, term));
+	}
+
 	function patientDetailWithCounts(patient: NavPatient): string {
 		return withCounts(patient.detail, [
 			plural(patient.studies.length, "study"),
@@ -220,12 +266,18 @@
 		return `${tierLabel(item.kind)} ${item.label}${item.detail ? `, ${item.detail}` : ""}`;
 	}
 
+	const filterActive = $derived(clean(filterQuery).length > 0);
+	const filteredFiles = $derived.by(() => {
+		if (!filterActive) return files;
+		return files.filter((file) => fileMatchesFilter(file, filterQuery));
+	});
+
 	const tree = $derived.by(() => {
 		const patients = new Map<string, NavPatient>();
 		const studies = new Map<string, NavStudy>();
 		const seriesByKey = new Map<string, NavSeries>();
 
-		for (const file of files) {
+		for (const file of filteredFiles) {
 			const patientKey = nodeKey("patient", `file-${file.index}`, [file.patient_id, file.patient_name]);
 			let patient = patients.get(patientKey);
 			if (!patient) {
@@ -317,6 +369,18 @@
 	</div>
 
 	{#if !collapsed}
+		<div class="navigator-filter">
+			<input
+				class="filter-input"
+				type="search"
+				bind:value={filterQuery}
+				placeholder="Patient, study, series, modality"
+				aria-label="Filter file hierarchy"
+			/>
+			{#if filterActive}
+				<div class="filter-result">showing {filteredFiles.length} of {files.length} images</div>
+			{/if}
+		</div>
 		<div class="tree" role="tree" aria-label="DICOM file hierarchy">
 			{#each tree as patient}
 				{@const patientDetail = patientDetailWithCounts(patient)}
@@ -384,7 +448,7 @@
 <style>
 	.navigator {
 		display: grid;
-		grid-template-rows: auto 1fr;
+		grid-template-rows: auto auto 1fr;
 		min-width: 0;
 		min-height: 0;
 		background: var(--surface-panel);
@@ -427,10 +491,40 @@
 	}
 
 	.collapse-button:focus-visible,
+	.filter-input:focus-visible,
 	.tree-header:focus-visible,
 	.file-row:focus-visible {
 		outline: none;
 		box-shadow: inset var(--focus-ring);
+	}
+
+	.navigator-filter {
+		display: grid;
+		gap: 0.35rem;
+		padding: 0.5rem 0.65rem;
+		border-bottom: 1px solid var(--border-subtle);
+	}
+
+	.filter-input {
+		width: 100%;
+		height: var(--control-height);
+		min-width: 0;
+		border: 1px solid var(--border-subtle);
+		border-radius: var(--radius-control);
+		background: var(--surface-control);
+		color: var(--text-primary);
+		font: 0.78rem var(--font-ui);
+		padding: 0 0.55rem;
+	}
+
+	.filter-input::placeholder {
+		color: var(--text-muted);
+	}
+
+	.filter-result {
+		color: var(--text-muted);
+		font-size: 0.72rem;
+		line-height: 1.25;
 	}
 
 	.tree {
