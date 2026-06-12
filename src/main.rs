@@ -290,13 +290,13 @@ async fn run_vscode_bridge_launch(
         .timeout(Duration::from_secs(5))
         .build()
         .context("failed to create VS Code bridge HTTP client")?;
+    let cwd = env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let registry_endpoints =
+        discover_vscode_bridge_registry_endpoints(&cwd, RegistryMatch::AllowAny, now_unix_ms());
     let launch = BridgeLaunchRequest {
         program: program.to_string(),
         args: args.to_vec(),
-        cwd: env::current_dir()
-            .unwrap_or_else(|_| PathBuf::from("."))
-            .display()
-            .to_string(),
+        cwd: cwd.display().to_string(),
         wait: false,
         binary_path: env::current_exe()
             .ok()
@@ -310,7 +310,11 @@ async fn run_vscode_bridge_launch(
                 return wait_for_launched_vscode_session(&client, endpoint, launch_response).await;
             }
             Err(error) => {
-                if should_remove_registry_entry_after_launch_error(&error) {
+                if should_remove_registry_entry_after_launch_error(
+                    &error,
+                    endpoint,
+                    &registry_endpoints,
+                ) {
                     remove_vscode_bridge_registry_endpoint(endpoint);
                 }
                 bridge_debug(&format!("endpoint {} failed: {error}", endpoint.url));
@@ -369,8 +373,12 @@ async fn bridge_error_response_message(response: reqwest::Response) -> String {
     }
 }
 
-fn should_remove_registry_entry_after_launch_error(error: &BridgeLaunchError) -> bool {
-    matches!(error, BridgeLaunchError::Connect(_))
+fn should_remove_registry_entry_after_launch_error(
+    error: &BridgeLaunchError,
+    endpoint: &BridgeEndpoint,
+    registry_endpoints: &[BridgeEndpoint],
+) -> bool {
+    matches!(error, BridgeLaunchError::Connect(_)) && registry_endpoints.contains(endpoint)
 }
 
 async fn wait_for_launched_vscode_session(
@@ -1402,14 +1410,33 @@ mod tests {
 
     #[test]
     fn bridge_launch_cleanup_uses_typed_error_signal() {
+        let registry_endpoint = BridgeEndpoint {
+            url: "http://127.0.0.1:1111".to_string(),
+            token: "registry-token".to_string(),
+        };
+        let env_endpoint = BridgeEndpoint {
+            url: "http://127.0.0.1:2222".to_string(),
+            token: "env-token".to_string(),
+        };
+        let registry_endpoints = vec![registry_endpoint.clone()];
+
         assert!(should_remove_registry_entry_after_launch_error(
-            &BridgeLaunchError::Connect("connection refused".to_string())
+            &BridgeLaunchError::Connect("connection refused".to_string()),
+            &registry_endpoint,
+            &registry_endpoints,
+        ));
+        assert!(!should_remove_registry_entry_after_launch_error(
+            &BridgeLaunchError::Connect("connection refused".to_string()),
+            &env_endpoint,
+            &registry_endpoints,
         ));
         assert!(!should_remove_registry_entry_after_launch_error(
             &BridgeLaunchError::Http {
                 status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
                 message: "failed".to_string(),
-            }
+            },
+            &registry_endpoint,
+            &registry_endpoints,
         ));
     }
 
