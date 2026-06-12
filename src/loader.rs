@@ -1,10 +1,10 @@
 use crate::types::{FileEntry, LoadReport, WindowPreset};
 use anyhow::{anyhow, Context, Result};
-use dicom_dictionary_std::tags;
+use dicom_dictionary_std::{tags, uids};
 use dicom_object::OpenFileOptions;
 use rayon::prelude::*;
 use std::fs::File;
-use std::io::{self, Read};
+use std::io::{self, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -96,7 +96,8 @@ impl FromStr for ScanFilter {
         let (field, value) = raw
             .split_once('=')
             .ok_or_else(|| scan_filter_parse_error(raw))?;
-        let field = match field.trim() {
+        let field_name = field.trim().to_ascii_lowercase();
+        let field = match field_name.as_str() {
             "patient_id" => ScanFilterField::PatientId,
             "patient_name" => ScanFilterField::PatientName,
             "study_description" => ScanFilterField::StudyDescription,
@@ -381,6 +382,14 @@ fn has_dicm_preamble(path: &Path) -> Result<bool> {
 }
 
 fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
+    if transfer_syntax_uid == uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN {
+        let obj = OpenFileOptions::new()
+            .read_all()
+            .open_file(path)
+            .with_context(|| format!("failed to inspect deflated DICOM {}", path.display()))?;
+        return Ok(obj.element(tags::PIXEL_DATA).is_ok());
+    }
+
     let needle: &[u8] = if transfer_syntax_uid == "1.2.840.10008.1.2.2" {
         &[0x7f, 0xe0, 0x00, 0x10]
     } else {
@@ -388,6 +397,8 @@ fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
     };
     let mut file =
         File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    file.seek(io::SeekFrom::Start(132))
+        .with_context(|| format!("failed to seek {}", path.display()))?;
     let mut carried = Vec::<u8>::new();
     let mut chunk = [0_u8; 8192];
 

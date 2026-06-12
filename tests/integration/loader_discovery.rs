@@ -3,6 +3,7 @@ use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
 use dicom_object::{meta::FileMetaTableBuilder, InMemDicomObject};
 use std::fs;
+use std::io::{Seek, Write};
 use std::path::Path;
 use tempfile::tempdir;
 
@@ -105,6 +106,28 @@ async fn filters_matching_subset_by_metadata_field() {
 }
 
 #[tokio::test]
+async fn accepts_case_insensitive_filter_field_names() {
+    let dir = tempdir().expect("temp dir");
+    let ct = dir.path().join("ct.dcm");
+    let mr = dir.path().join("mr.dcm");
+    write_test_dicom(&ct, "PAT-CT", "CT", "20260101", 1, true);
+    write_test_dicom(&mr, "PAT-MR", "MR", "20260102", 1, true);
+
+    let report = loader::discover(
+        &[dir.path().to_path_buf()],
+        DiscoverOptions {
+            recursive: true,
+            filters: vec!["Modality=MR".parse().expect("filter parses")],
+        },
+    )
+    .await
+    .expect("filtered discovery should succeed");
+
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].patient_id, "PAT-MR");
+}
+
+#[tokio::test]
 async fn filters_and_multiple_terms_together() {
     let dir = tempdir().expect("temp dir");
     let first = dir.path().join("first.dcm");
@@ -147,6 +170,29 @@ async fn filters_matching_nothing_error_after_valid_files_are_filtered() {
     .expect_err("all-filtered discovery should fail");
 
     assert!(error.to_string().contains("no valid DICOM files"));
+}
+
+#[tokio::test]
+async fn ignores_pixel_data_byte_pattern_in_file_preamble() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("no-pixels-preamble-pattern.dcm");
+    write_test_dicom(&path, "PAT-SR", "SR", "20260101", 1, false);
+
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("open fixture for preamble edit");
+    file.seek(std::io::SeekFrom::Start(0))
+        .expect("seek preamble");
+    file.write_all(&[0xe0, 0x7f, 0x10, 0x00])
+        .expect("write preamble pattern");
+
+    let report = loader::discover(&[path], discover_options(true))
+        .await
+        .expect("discovery should succeed");
+
+    assert_eq!(report.files.len(), 1);
+    assert!(!report.files[0].has_pixels);
 }
 
 #[test]
