@@ -632,7 +632,13 @@ def _canonical_bridge_registry_dir() -> str:
 	user_profile = os.environ.get("USERPROFILE")
 	if user_profile and os.path.isabs(user_profile):
 		return _join_registry_path(user_profile, ".local", "state", "dcmview", "vscode-bridges")
-	return _join_registry_path(str(Path.home()), ".local", "state", "dcmview", "vscode-bridges")
+	try:
+		home = str(Path.home())
+	except RuntimeError:
+		home = "."
+	if not os.path.isabs(home):
+		home = "."
+	return _join_registry_path(home, ".local", "state", "dcmview", "vscode-bridges")
 
 
 def _dedupe_strings(values: Iterable[str]) -> list[str]:

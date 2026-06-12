@@ -679,6 +679,14 @@ class WrapperTests(unittest.TestCase):
 			"/tmp/dcmview-vscode-bridges-remote_user_example",
 		)
 
+	def test_bridge_registry_dir_falls_back_when_home_is_unavailable(self) -> None:
+		with mock.patch.dict(os.environ, {}, clear=True):
+			with mock.patch.object(wrapper.Path, "home", side_effect=RuntimeError("no home")):
+				self.assertEqual(
+					wrapper._canonical_bridge_registry_dir(),
+					str(Path(".").joinpath(".local", "state", "dcmview", "vscode-bridges")),
+				)
+
 	def test_bridge_registry_discovery_ignores_invalid_entries(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			registry = Path(tmp)
