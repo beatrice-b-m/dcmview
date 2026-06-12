@@ -1,17 +1,38 @@
 {
   "ttlMs": 10800000,
   "refreshMs": 3600000,
+  "presenceCheckMs": 60000,
   "registryDirs": [
     {
       "name": "env override",
       "env": {
         "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": "/custom/bridges",
-        "XDG_RUNTIME_DIR": "/run/user/1000",
+        "XDG_STATE_HOME": "/home/research/.local/state",
         "USER": "ignored"
       },
       "tmpDir": "/tmp",
       "expected": "/custom/bridges"
     },
+    {
+      "name": "xdg state",
+      "env": {
+        "XDG_STATE_HOME": "/home/research/.local/state",
+        "USER": "ignored"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/home/research/.local/state/dcmview/vscode-bridges"
+    },
+    {
+      "name": "home fallback",
+      "env": {
+        "HOME": "/home/research",
+        "USER": "remote user@example"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/home/research/.local/state/dcmview/vscode-bridges"
+    }
+  ],
+  "legacyRegistryDirs": [
     {
       "name": "xdg runtime",
       "env": {

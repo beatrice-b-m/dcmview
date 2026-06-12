@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- Improve VS Code bridge reliability for Remote-SSH and notebook workflows by
+  publishing the bridge in the per-user state directory, falling back from stale
+  env endpoints to registry discovery, and validating optional client-supplied
+  `dcmview` binaries from `dcmview-py`.
+- Updated wrappers scan legacy registry locations for one release, so update the
+  VS Code extension first when rolling this out across shared hosts.
+
 ## 0.2.2
 
 - Add Windows 11 x64 release artifacts across GitHub Releases, PyPI wheels, and

@@ -10,7 +10,8 @@
       "program": "dcmview_py",
       "args": ["--no-browser", "--port", "0", "/workspace/scan.dcm"],
       "cwd": "/workspace",
-      "wait": false
+      "wait": false,
+      "binaryPath": "/workspace/.venv/lib/python3.12/site-packages/dcmview_py/bin/dcmview"
     },
     "response": {
       "sessionId": "session-1",

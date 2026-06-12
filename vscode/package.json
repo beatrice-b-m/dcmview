@@ -42,6 +42,7 @@
     "onCommand:dcmview.openPath",
     "onCommand:dcmview.openWorkspaceSelection",
     "onCommand:dcmview.stopAll",
+    "onCommand:dcmview.showBridgeStatus",
     "onCustomEditor:dcmview.dicomViewer"
   ],
   "contributes": {
@@ -59,6 +60,11 @@
       {
         "command": "dcmview.stopAll",
         "title": "Stop All dcmview Sessions",
+        "category": "dcmview"
+      },
+      {
+        "command": "dcmview.showBridgeStatus",
+        "title": "Show Bridge Status",
         "category": "dcmview"
       }
     ],

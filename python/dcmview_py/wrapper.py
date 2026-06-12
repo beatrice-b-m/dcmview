@@ -23,6 +23,7 @@ _VSCODE_BRIDGE_URL_ENV = "DCMVIEW_VSCODE_BRIDGE_URL"
 _VSCODE_BRIDGE_TOKEN_ENV = "DCMVIEW_VSCODE_BRIDGE_TOKEN"
 _VSCODE_BRIDGE_BYPASS_ENV = "DCMVIEW_VSCODE_BYPASS"
 _VSCODE_BRIDGE_REGISTRY_DIR_ENV = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR"
+_VSCODE_BRIDGE_DEBUG_ENV = "DCMVIEW_VSCODE_BRIDGE_DEBUG"
 _BRIDGE_REGISTRY_MAX_AGE_SECONDS = 3 * 60 * 60
 
 PathInput = Union[str, os.PathLike[str]]
@@ -252,20 +253,25 @@ def _view_via_vscode_bridge(
 		"args": args,
 		"cwd": os.getcwd(),
 		"wait": False,
+		"binaryPath": _resolve_binary(),
 	}
 	response: dict[str, object] | None = None
 	endpoint: BridgeEndpoint | None = None
 	last_error: BaseException | None = None
+	registry_endpoints = set(_bridge_registry_endpoints(os.getcwd()))
 	for candidate in endpoints:
 		try:
+			_bridge_debug(f"trying endpoint {candidate[0]}")
 			response = _bridge_json_request("POST", "/launch", payload, endpoint=candidate)
 			endpoint = candidate
+			_bridge_debug(f"selected endpoint {candidate[0]}")
 			break
 		except urllib.error.HTTPError as error:
 			last_error = error
 		except (OSError, urllib.error.URLError, RuntimeError) as error:
-			if isinstance(error, urllib.error.URLError):
+			if isinstance(error, urllib.error.URLError) and candidate in registry_endpoints:
 				_remove_bridge_registry_endpoint(candidate)
+			_bridge_debug(f"endpoint {candidate[0]} failed: {error}")
 			last_error = error
 	if response is None or endpoint is None:
 		if last_error is not None:
@@ -436,23 +442,52 @@ def _bridge_available() -> bool:
 
 def _bridge_endpoints() -> list[BridgeEndpoint]:
 	if os.environ.get(_VSCODE_BRIDGE_BYPASS_ENV) == "1":
+		_bridge_debug("bridge discovery bypassed by DCMVIEW_VSCODE_BYPASS=1")
 		return []
 
+	endpoints: list[BridgeEndpoint] = []
+	seen: set[BridgeEndpoint] = set()
 	url = os.environ.get(_VSCODE_BRIDGE_URL_ENV)
 	token = os.environ.get(_VSCODE_BRIDGE_TOKEN_ENV)
 	if url and token:
-		return [(url, token)]
+		endpoint = (url, token)
+		endpoints.append(endpoint)
+		seen.add(endpoint)
+		_bridge_debug(f"accepted env endpoint {url}")
 
-	return _bridge_registry_endpoints(os.getcwd())
+	for endpoint in _bridge_registry_endpoints(os.getcwd()):
+		if endpoint not in seen:
+			endpoints.append(endpoint)
+			seen.add(endpoint)
+	_bridge_debug(f"discovered {len(endpoints)} bridge endpoint(s)")
+	return endpoints
 
 
 def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> list[BridgeEndpoint]:
-	registry_dir = Path(_bridge_registry_dir())
+	endpoints: list[BridgeEndpoint] = []
+	seen: set[BridgeEndpoint] = set()
+	for registry_dir in _bridge_registry_dirs():
+		for endpoint in _bridge_registry_endpoints_from_dir(Path(registry_dir), cwd, now_ms=now_ms):
+			if endpoint not in seen:
+				endpoints.append(endpoint)
+				seen.add(endpoint)
+	return endpoints
+
+
+def _bridge_registry_endpoints_from_dir(
+	registry_dir: Path,
+	cwd: str,
+	*,
+	now_ms: Optional[int] = None,
+) -> list[BridgeEndpoint]:
+	_bridge_debug(f"scanning bridge registry dir {registry_dir}")
 	if not _registry_dir_is_trusted(registry_dir):
+		_bridge_debug(f"registry dir untrusted or missing: {registry_dir}")
 		return []
 	try:
 		paths = list(registry_dir.glob("*.json"))
 	except OSError:
+		_bridge_debug(f"registry dir unreadable: {registry_dir}")
 		return []
 
 	if now_ms is None:
@@ -463,29 +498,36 @@ def _bridge_registry_endpoints(cwd: str, *, now_ms: Optional[int] = None) -> lis
 		try:
 			entry = json.loads(path.read_text(encoding="utf-8"))
 		except (OSError, json.JSONDecodeError):
+			_bridge_debug(f"registry entry skipped unreadable: {path}")
 			continue
 		if not isinstance(entry, dict):
+			_bridge_debug(f"registry entry skipped non-object: {path}")
 			continue
 		version = entry.get("version")
 		if version is not None and (
 			not isinstance(version, int) or isinstance(version, bool) or version != 1
 		):
+			_bridge_debug(f"registry entry skipped unsupported version: {path}")
 			continue
 		url = entry.get("bridgeUrl")
 		token = entry.get("token")
 		if not isinstance(url, str) or not url or not isinstance(token, str) or not token:
+			_bridge_debug(f"registry entry skipped missing endpoint: {path}")
 			continue
 		created_at = entry.get("createdAtMs")
 		if not isinstance(created_at, int) or isinstance(created_at, bool):
 			_remove_registry_file(path)
+			_bridge_debug(f"registry entry removed malformed timestamp: {path}")
 			continue
 		if _is_expired_registry_entry(created_at, now_ms):
 			_remove_registry_file(path)
+			_bridge_debug(f"registry entry removed expired: {path}")
 			continue
 		workspace_roots = entry.get("workspaceRoots")
 		if not isinstance(workspace_roots, list):
 			workspace_roots = []
 		match_score = _workspace_match_score(cwd_path, workspace_roots)
+		_bridge_debug(f"registry entry accepted: {path}")
 		candidates.append((match_score, created_at, (url, token)))
 
 	candidates.sort(key=lambda candidate: (candidate[0], candidate[1]), reverse=True)
@@ -532,7 +574,11 @@ def _remove_registry_file(path: Path) -> None:
 
 
 def _remove_bridge_registry_endpoint(endpoint: BridgeEndpoint) -> None:
-	registry_dir = Path(_bridge_registry_dir())
+	for registry_dir_name in _bridge_registry_dirs():
+		_remove_bridge_registry_endpoint_from_dir(endpoint, Path(registry_dir_name))
+
+
+def _remove_bridge_registry_endpoint_from_dir(endpoint: BridgeEndpoint, registry_dir: Path) -> None:
 	if not _registry_dir_is_trusted(registry_dir):
 		return
 	try:
@@ -553,19 +599,51 @@ def _remove_bridge_registry_endpoint(endpoint: BridgeEndpoint) -> None:
 
 
 def _bridge_registry_dir() -> str:
+	return _bridge_registry_dirs()[0]
+
+
+def _bridge_registry_dirs() -> list[str]:
 	configured = os.environ.get(_VSCODE_BRIDGE_REGISTRY_DIR_ENV)
 	if configured:
-		return configured
+		return [configured]
+
+	dirs = [_canonical_bridge_registry_dir()]
 
 	runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
 	if runtime_dir and os.path.isabs(runtime_dir):
-		return _join_registry_path(runtime_dir, "dcmview", "vscode-bridges")
+		dirs.append(_join_registry_path(runtime_dir, "dcmview", "vscode-bridges"))
 
 	user = os.environ.get("USER") or os.environ.get("USERNAME") or "default"
-	return _join_registry_path(
+	dirs.append(_join_registry_path(
 		tempfile.gettempdir(),
 		f"dcmview-vscode-bridges-{_safe_registry_segment(user)}",
-	)
+	))
+	return _dedupe_strings(dirs)
+
+
+def _canonical_bridge_registry_dir() -> str:
+	state_home = os.environ.get("XDG_STATE_HOME")
+	if state_home and os.path.isabs(state_home):
+		return _join_registry_path(state_home, "dcmview", "vscode-bridges")
+	home = os.environ.get("HOME")
+	if home and os.path.isabs(home):
+		return _join_registry_path(home, ".local", "state", "dcmview", "vscode-bridges")
+	return _join_registry_path(str(Path.home()), ".local", "state", "dcmview", "vscode-bridges")
+
+
+def _dedupe_strings(values: Iterable[str]) -> list[str]:
+	seen: set[str] = set()
+	result: list[str] = []
+	for value in values:
+		if value not in seen:
+			result.append(value)
+			seen.add(value)
+	return result
+
+
+def _bridge_debug(message: str) -> None:
+	if os.environ.get(_VSCODE_BRIDGE_DEBUG_ENV) == "1":
+		print(f"dcmview bridge: {message}", file=sys.stderr)
 
 
 def _join_registry_path(base: str, *segments: str) -> str:
@@ -622,8 +700,23 @@ def _bridge_json_request(
 			"Content-Type": "application/json",
 		},
 	)
-	with urllib.request.urlopen(request, timeout=timeout) as response:
-		return json.loads(response.read().decode("utf-8"))
+	try:
+		with urllib.request.urlopen(request, timeout=timeout) as response:
+			return json.loads(response.read().decode("utf-8"))
+	except urllib.error.HTTPError as error:
+		raise RuntimeError(_bridge_http_error_message(error)) from error
+
+
+def _bridge_http_error_message(error: urllib.error.HTTPError) -> str:
+	detail = ""
+	try:
+		body = error.read().decode("utf-8")
+		parsed = json.loads(body)
+		if isinstance(parsed, dict) and isinstance(parsed.get("error"), str):
+			detail = f": {parsed['error']}"
+	except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+		pass
+	return f"VS Code bridge returned HTTP {error.code}{detail}"
 
 
 def _resolve_binary() -> str:

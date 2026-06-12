@@ -22,22 +22,42 @@ The extension resolves binaries in this order:
 4. `dcmview` on `PATH`.
 
 When `dcmview.terminalInterception.enabled` is true, the extension starts a
-private loopback bridge and prepends generated shims to new integrated
-terminals. Open a fresh terminal after the Extension Development Host starts so
-the terminal receives the bridge environment.
+private loopback bridge, publishes it in a per-user registry under
+`$XDG_STATE_HOME/dcmview/vscode-bridges` or
+`~/.local/state/dcmview/vscode-bridges`, and prepends generated shims to new
+integrated terminals when a local `dcmview` binary is available. Open a fresh
+terminal after the Extension Development Host starts so the terminal receives
+the bridge environment and PATH shims.
 
-The bridge is also published through a short-lived registry file on the remote
-host so direct `dcmview` binaries launched inside the active workspace and
-`dcmview_py.view(...)` calls from VS Code Jupyter kernels can route into the VS
-Code webview even when they did not inherit the integrated-terminal environment.
-The extension refreshes the registry hourly; entries expire after 3 hours so
-crash leftovers do not affect future sessions indefinitely. Direct Rust CLI
-registry discovery requires the current working directory to be inside a VS Code
-workspace root. The Python wrapper intentionally accepts any live bridge on the
-host for notebook kernels whose cwd may be outside the workspace; pass
-`vscode_bridge=False` to `dcmview_py.view(...)` or set
+The registry lets processes that did not inherit the integrated-terminal
+environment route into VS Code. For one release, readers also scan the legacy
+`$XDG_RUNTIME_DIR/dcmview/vscode-bridges` and
+`/tmp/dcmview-vscode-bridges-$USER` locations so updated wrappers can still find
+an older extension. The extension refreshes the registry hourly, re-publishes it
+when terminals open, and checks once per minute that the file still exists;
+entries expire after 3 hours so crash leftovers do not affect future sessions
+indefinitely.
+
+Support matrix:
+
+| Launcher | Discovery mechanism | Notes |
+|---|---|---|
+| New integrated terminal `dcmview` / `dcmview-py` | PATH shim plus bridge env | Requires a fresh terminal after extension activation. |
+| Existing integrated terminal | Bridge env if already present, then registry fallback | Long-lived shells heal stale env endpoints by trying the registry next. |
+| tmux/screen started from an old terminal | Stale inherited env, then registry fallback | Restart the tmux server if you need refreshed PATH shims. |
+| Plain SSH shell outside VS Code | Registry fallback | Direct Rust CLI discovery requires cwd inside a VS Code workspace root. |
+| VS Code Jupyter kernel | Registry fallback | `dcmview_py.view(...)` accepts any live bridge for the same user. |
+
+Pass `vscode_bridge=False` to `dcmview_py.view(...)` or set
 `DCMVIEW_VSCODE_BYPASS=1` to opt out. Set
 `DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR` only for testing custom registry locations.
+Set `DCMVIEW_VSCODE_BRIDGE_DEBUG=1` before launching Python or Rust clients to
+print registry directories, accepted entries, skipped entries, and connection
+failures to stderr. Use the `dcmview: Show Bridge Status` command in VS Code to
+show the active bridge URL, registry path, last publish time, and session count.
+For long-running Remote-SSH deployments, `loginctl enable-linger` can keep the
+VS Code remote server alive across login-session churn, but the bridge registry
+no longer depends on `/run/user/<uid>` being present.
 
 ## Run in an Extension Development Host
 
@@ -88,6 +108,7 @@ Python wrapper path without extension interception.
 - `dcmview: Open with dcmview` opens selected files and folders.
 - `dcmview: Open Workspace with dcmview` opens the selected workspace folder.
 - `dcmview: Stop All dcmview Sessions` terminates all running child processes.
+- `dcmview: Show Bridge Status` reports the bridge URL and registry path.
 - `Reopen With...` offers `dcmview` for `*.dcm`, `*.dicom`, and `*.ima` files.
 - Setting `dcmview` as the default editor for matching DICOM extensions makes
   double-click open those files in a dcmview editor tab.

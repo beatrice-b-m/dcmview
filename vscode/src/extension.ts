@@ -15,6 +15,7 @@ const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
 const BRIDGE_URL_ENV = 'DCMVIEW_VSCODE_BRIDGE_URL';
 export const BRIDGE_REGISTRY_MAX_AGE_MS = 3 * 60 * 60 * 1000;
 export const BRIDGE_REGISTRY_REFRESH_MS = 60 * 60 * 1000;
+export const BRIDGE_REGISTRY_PRESENCE_CHECK_MS = 60 * 1000;
 
 interface StartupEvent {
   type: string;
@@ -111,6 +112,7 @@ interface BridgeLaunchRequest {
   args?: string[];
   cwd?: string;
   wait?: boolean;
+  binaryPath?: string;
 }
 
 interface BridgeLaunchResponse {
@@ -124,6 +126,9 @@ const sessionsById = new Map<string, RunningSession>();
 let outputChannel: vscode.OutputChannel | undefined;
 let bridgeServer: BridgeServer | undefined;
 let bridgeRefreshTimer: NodeJS.Timeout | undefined;
+let bridgePresenceTimer: NodeJS.Timeout | undefined;
+let lastBridgeRegistryPublishMs: number | undefined;
+let binaryResolutionWarningShown = false;
 
 export function activate(context: vscode.ExtensionContext): void {
   outputChannel = vscode.window.createOutputChannel('dcmview');
@@ -141,6 +146,7 @@ export function activate(context: vscode.ExtensionContext): void {
       await stopAllSessions();
       vscode.window.showInformationMessage('Stopped all dcmview sessions.');
     }),
+    vscode.commands.registerCommand('dcmview.showBridgeStatus', () => showBridgeStatus()),
     vscode.window.registerCustomEditorProvider(
       DICOM_CUSTOM_EDITOR_VIEW_TYPE,
       new DicomCustomEditorProvider(context),
@@ -152,6 +158,9 @@ export function activate(context: vscode.ExtensionContext): void {
     }),
     vscode.workspace.onDidChangeWorkspaceFolders(() => {
       void configureTerminalInterception(context);
+    }),
+    vscode.window.onDidOpenTerminal(() => {
+      void republishBridgeRegistryIfAvailable();
     }),
     { dispose: () => stopBridgeRegistryRefresh() },
     { dispose: () => void stopBridge() },
@@ -700,19 +709,26 @@ async function configureTerminalInterception(context: vscode.ExtensionContext): 
 
   const output = getOutputChannel();
   try {
-    const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
     const bridge = await ensureBridge(context);
     const registryDir = bridgeRegistryDirectory();
-    await writeBridgeRegistry(bridge, registryDir);
+    await publishBridgeRegistry(bridge, registryDir);
     startBridgeRegistryRefresh(bridge, registryDir);
-    const shimDir = await ensureShimDirectory(context, binary);
 
     env.description = 'Routes dcmview terminal commands into the VS Code dcmview viewer.';
-    env.prepend('PATH', `${shimDir}${path.delimiter}`);
     env.replace(BRIDGE_REGISTRY_DIR_ENV, registryDir);
     env.replace(BRIDGE_URL_ENV, bridge.url);
     env.replace(BRIDGE_TOKEN_ENV, bridge.token);
-    output.appendLine(`dcmview terminal interception enabled at ${bridge.url}`);
+
+    try {
+      const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
+      const shimDir = await ensureShimDirectory(context, binary);
+      env.prepend('PATH', `${shimDir}${path.delimiter}`);
+      output.appendLine(`dcmview terminal interception enabled at ${bridge.url}`);
+    } catch (error) {
+      output.appendLine(
+        `dcmview bridge enabled at ${bridge.url}; terminal shims disabled: ${formatError(error)}`,
+      );
+    }
   } catch (error) {
     env.clear();
     output.appendLine(`dcmview terminal interception disabled: ${formatError(error)}`);
@@ -762,6 +778,7 @@ async function stopBridge(): Promise<void> {
   if (bridge.registryPath) {
     await fs.promises.unlink(bridge.registryPath).catch(() => undefined);
   }
+  lastBridgeRegistryPublishMs = undefined;
 
   await new Promise<void>((resolve) => {
     bridge.server.close(() => resolve());
@@ -771,17 +788,27 @@ async function stopBridge(): Promise<void> {
 function startBridgeRegistryRefresh(bridge: BridgeServer, registryDir: string): void {
   stopBridgeRegistryRefresh();
   bridgeRefreshTimer = setInterval(() => {
-    void writeBridgeRegistry(bridge, registryDir).catch((error) => {
+    void publishBridgeRegistry(bridge, registryDir).catch((error) => {
       getOutputChannel().appendLine(`dcmview bridge registry refresh failed: ${formatError(error)}`);
     });
   }, BRIDGE_REGISTRY_REFRESH_MS);
   bridgeRefreshTimer.unref?.();
+  bridgePresenceTimer = setInterval(() => {
+    void ensureBridgeRegistryPresent(bridge, registryDir).catch((error) => {
+      getOutputChannel().appendLine(`dcmview bridge registry presence check failed: ${formatError(error)}`);
+    });
+  }, BRIDGE_REGISTRY_PRESENCE_CHECK_MS);
+  bridgePresenceTimer.unref?.();
 }
 
 function stopBridgeRegistryRefresh(): void {
   if (bridgeRefreshTimer) {
     clearInterval(bridgeRefreshTimer);
     bridgeRefreshTimer = undefined;
+  }
+  if (bridgePresenceTimer) {
+    clearInterval(bridgePresenceTimer);
+    bridgePresenceTimer = undefined;
   }
 }
 
@@ -831,6 +858,10 @@ async function handleBridgeRequest(
 
     writeJson(response, 404, { error: 'not found' });
   } catch (error) {
+    if (error instanceof BridgeRequestError) {
+      writeJson(response, error.statusCode, { error: error.message });
+      return;
+    }
     writeJson(response, 500, { error: formatError(error) });
   }
 }
@@ -860,7 +891,7 @@ async function launchFromBridge(
 ): Promise<BridgeLaunchResponse> {
   const settings = readSettings();
   const output = getOutputChannel();
-  const binary = await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
+  const binary = await resolveBridgeLaunchBinary(context, settings, request);
   const args = normalizeInterceptedArgs(request.args ?? []);
   const cwd = request.cwd && path.isAbsolute(request.cwd) ? request.cwd : firstWorkspacePath();
   const title = `dcmview: ${request.program ?? 'terminal'}`;
@@ -873,6 +904,64 @@ async function launchFromBridge(
     response.exitCode = await session.exitCode;
   }
   return response;
+}
+
+class BridgeRequestError extends Error {
+  constructor(
+    readonly statusCode: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function resolveBridgeLaunchBinary(
+  context: vscode.ExtensionContext,
+  settings: ExtensionSettings,
+  request: BridgeLaunchRequest,
+): Promise<string> {
+  try {
+    return await resolveBinaryPath(context.extensionUri.fsPath, settings.binaryPath);
+  } catch (localError) {
+    const clientBinary = request.binaryPath;
+    if (clientBinary && (await clientBinaryPathIsTrusted(clientBinary))) {
+      return clientBinary;
+    }
+    if (!binaryResolutionWarningShown) {
+      binaryResolutionWarningShown = true;
+      vscode.window.showWarningMessage(
+        'dcmview bridge could not find a usable binary. Set dcmview.binaryPath or use a dcmview-py wrapper with a bundled binary.',
+      );
+    }
+    const suffix = clientBinary ? `; rejected client binary ${clientBinary}` : '';
+    throw new BridgeRequestError(
+      422,
+      `${formatError(localError)}${suffix}. Set dcmview.binaryPath or install a bundled dcmview binary.`,
+    );
+  }
+}
+
+export async function clientBinaryPathIsTrusted(filePath: string): Promise<boolean> {
+  if (!path.isAbsolute(filePath)) {
+    return false;
+  }
+  const baseName = path.basename(filePath).toLowerCase();
+  if (baseName !== 'dcmview' && baseName !== 'dcmview.exe') {
+    return false;
+  }
+  let stats: fs.Stats;
+  try {
+    stats = await fs.promises.stat(filePath);
+  } catch {
+    return false;
+  }
+  if (!stats.isFile()) {
+    return false;
+  }
+  if (process.platform === 'win32' || typeof process.getuid !== 'function') {
+    return true;
+  }
+  return stats.uid === process.getuid() && (stats.mode & 0o022) === 0;
 }
 
 function firstWorkspacePath(): string {
@@ -914,20 +1003,20 @@ async function ensureShimDirectory(context: vscode.ExtensionContext, binary: str
 
 export function bridgeRegistryDirectory(
   env: NodeJS.ProcessEnv = process.env,
-  tmpDir: string = os.tmpdir(),
+  _tmpDir: string = os.tmpdir(),
 ): string {
   const configured = env[BRIDGE_REGISTRY_DIR_ENV];
   if (configured && configured.trim().length > 0) {
     return configured;
   }
 
-  const runtimeDir = env.XDG_RUNTIME_DIR;
-  if (runtimeDir && path.isAbsolute(runtimeDir)) {
-    return path.join(runtimeDir, 'dcmview', 'vscode-bridges');
+  const stateHome = env.XDG_STATE_HOME;
+  if (stateHome && path.isAbsolute(stateHome)) {
+    return path.join(stateHome, 'dcmview', 'vscode-bridges');
   }
 
-  const user = env.USER || env.USERNAME || 'default';
-  return path.join(tmpDir, `dcmview-vscode-bridges-${safeRegistrySegment(user)}`);
+  const home = env.HOME || os.homedir();
+  return path.join(home, '.local', 'state', 'dcmview', 'vscode-bridges');
 }
 
 export function safeRegistrySegment(value: string): string {
@@ -1012,6 +1101,63 @@ export async function writeBridgeRegistry(
     await fs.promises.unlink(previousRegistryPath).catch(() => undefined);
   }
   return registryPath;
+}
+
+async function publishBridgeRegistry(
+  bridge: WritableBridgeRegistry,
+  registryDir: string,
+  roots: string[] = workspaceRoots(),
+  createdAtMs = Date.now(),
+): Promise<string> {
+  const registryPath = await writeBridgeRegistry(bridge, registryDir, roots, createdAtMs);
+  lastBridgeRegistryPublishMs = createdAtMs;
+  return registryPath;
+}
+
+export async function ensureBridgeRegistryPresent(
+  bridge: WritableBridgeRegistry,
+  registryDir: string,
+): Promise<string | undefined> {
+  if (bridge.registryPath) {
+    try {
+      await fs.promises.stat(bridge.registryPath);
+      return undefined;
+    } catch {
+      return publishBridgeRegistry(bridge, registryDir);
+    }
+  }
+  return publishBridgeRegistry(bridge, registryDir);
+}
+
+async function republishBridgeRegistryIfAvailable(): Promise<void> {
+  if (!bridgeServer) {
+    return;
+  }
+  const registryDir = bridgeRegistryDirectory();
+  try {
+    await publishBridgeRegistry(bridgeServer, registryDir);
+  } catch (error) {
+    getOutputChannel().appendLine(`dcmview bridge registry publish failed: ${formatError(error)}`);
+  }
+}
+
+function showBridgeStatus(): void {
+  const output = getOutputChannel();
+  if (!bridgeServer) {
+    output.appendLine('dcmview bridge status: not running');
+    output.show(true);
+    return;
+  }
+  output.appendLine('dcmview bridge status: running');
+  output.appendLine(`  url: ${bridgeServer.url}`);
+  output.appendLine(`  registryPath: ${bridgeServer.registryPath ?? '(not published)'}`);
+  output.appendLine(
+    `  lastPublish: ${
+      lastBridgeRegistryPublishMs ? new Date(lastBridgeRegistryPublishMs).toISOString() : '(never)'
+    }`,
+  );
+  output.appendLine(`  activeSessions: ${sessions.size}`);
+  output.show(true);
 }
 
 export function registryDirectoryIsTrusted(stats: Pick<fs.Stats, 'uid' | 'mode'>): boolean {

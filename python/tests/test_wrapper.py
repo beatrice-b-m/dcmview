@@ -442,9 +442,10 @@ class WrapperTests(unittest.TestCase):
 					{"exitCode": 0},
 				],
 			) as bridge_mock:
-				with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
-					with redirect_stdout(StringIO()):
-						result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
+				with mock.patch("dcmview_py.wrapper._resolve_binary", return_value="/tmp/dcmview"):
+					with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+						with redirect_stdout(StringIO()):
+							result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
 
 		self.assertIsNone(result)
 		popen_mock.assert_not_called()
@@ -452,6 +453,7 @@ class WrapperTests(unittest.TestCase):
 		self.assertEqual(launch_payload["program"], "dcmview_py")
 		self.assertIn(str(FIXTURE_FILE), launch_payload["args"])
 		self.assertFalse(launch_payload["wait"])
+		self.assertEqual(launch_payload["binaryPath"], "/tmp/dcmview")
 
 	def test_bridge_json_request_matches_shared_launch_fixture(self) -> None:
 		fixture = json.loads(BRIDGE_CONTRACT.read_text(encoding="utf-8"))
@@ -598,6 +600,47 @@ class WrapperTests(unittest.TestCase):
 				)
 
 		self.assertEqual([list(endpoint) for endpoint in endpoints], contract["ordering"]["expectedAllowAny"])
+
+		for test_case in contract["legacyRegistryDirs"]:
+			with mock.patch.dict(os.environ, test_case["env"], clear=True):
+				with mock.patch("dcmview_py.wrapper.tempfile.gettempdir", return_value=test_case["tmpDir"]):
+					self.assertIn(test_case["expected"], wrapper._bridge_registry_dirs())
+
+	def test_bridge_discovery_uses_env_then_registry(self) -> None:
+		with tempfile.TemporaryDirectory() as tmp:
+			registry = Path(tmp)
+			(registry / "live.json").write_text(
+				json.dumps(
+					{
+						"version": 1,
+						"instanceId": "live",
+						"bridgeUrl": "http://127.0.0.1:2222",
+						"token": "registry-token",
+						"workspaceRoots": [],
+						"createdAtMs": int(time.time() * 1000),
+					}
+				),
+				encoding="utf-8",
+			)
+
+			with mock.patch.dict(
+				os.environ,
+				{
+					"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:1111",
+					"DCMVIEW_VSCODE_BRIDGE_TOKEN": "env-token",
+					"DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR": str(registry),
+				},
+				clear=True,
+			):
+				endpoints = wrapper._bridge_endpoints()
+
+		self.assertEqual(
+			endpoints,
+			[
+				("http://127.0.0.1:1111", "env-token"),
+				("http://127.0.0.1:2222", "registry-token"),
+			],
+		)
 
 	def test_bridge_registry_path_join_preserves_posix_style_inputs(self) -> None:
 		self.assertEqual(
@@ -755,9 +798,10 @@ class WrapperTests(unittest.TestCase):
 
 		with mock.patch("dcmview_py.wrapper._bridge_endpoints", return_value=endpoints):
 			with mock.patch("dcmview_py.wrapper._bridge_json_request", side_effect=fake_bridge_request):
-				with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
-					with redirect_stdout(StringIO()):
-						result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
+				with mock.patch("dcmview_py.wrapper._resolve_binary", return_value="/tmp/dcmview"):
+					with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+						with redirect_stdout(StringIO()):
+							result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
 
 		self.assertIsNone(result)
 		popen_mock.assert_not_called()
@@ -796,12 +840,13 @@ class WrapperTests(unittest.TestCase):
 					{"exitCode": 0},
 				],
 			) as bridge_mock:
-				with redirect_stdout(StringIO()):
-					handle = wrapper.view([FIXTURE_FILE], browser=False, block=False)
-				self.assertIsNotNone(handle)
-				assert handle is not None
-				self.assertEqual(handle.url, "http://127.0.0.1:9999")
-				self.assertEqual(handle.stop(), 0)
+				with mock.patch("dcmview_py.wrapper._resolve_binary", return_value="/tmp/dcmview"):
+					with redirect_stdout(StringIO()):
+						handle = wrapper.view([FIXTURE_FILE], browser=False, block=False)
+					self.assertIsNotNone(handle)
+					assert handle is not None
+					self.assertEqual(handle.url, "http://127.0.0.1:9999")
+					self.assertEqual(handle.stop(), 0)
 
 		self.assertEqual(bridge_mock.call_args_list[1].args[:2], ("POST", "/sessions/abc/stop"))
 		self.assertEqual(bridge_mock.call_args_list[2].args[:2], ("GET", "/sessions/abc/wait"))

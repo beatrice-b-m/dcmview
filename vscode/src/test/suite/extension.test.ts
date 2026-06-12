@@ -6,6 +6,7 @@ import * as path from 'path';
 import * as vscode from 'vscode';
 import {
   BRIDGE_REGISTRY_MAX_AGE_MS,
+  BRIDGE_REGISTRY_PRESENCE_CHECK_MS,
   BRIDGE_REGISTRY_REFRESH_MS,
   DICOM_CUSTOM_EDITOR_VIEW_TYPE,
   binaryCandidates,
@@ -13,7 +14,9 @@ import {
   bridgeRegistryEntry,
   bridgeStopResponse,
   bridgeWaitResponse,
+  clientBinaryPathIsTrusted,
   collectFileSystemPaths,
+  ensureBridgeRegistryPresent,
   isAuthorizedBridgeRequest,
   isExpiredRegistryEntry,
   orderBridgeRegistryEndpoints,
@@ -181,18 +184,19 @@ suite('dcmview extension', () => {
       '/custom/bridges',
     );
     assert.strictEqual(
-      bridgeRegistryDirectory({ XDG_RUNTIME_DIR: '/run/user/1000' }, '/tmp'),
-      path.join('/run/user/1000', 'dcmview', 'vscode-bridges'),
+      bridgeRegistryDirectory({ XDG_STATE_HOME: '/home/research/.local/state' }, '/tmp'),
+      path.join('/home/research/.local/state', 'dcmview', 'vscode-bridges'),
     );
     assert.strictEqual(
-      bridgeRegistryDirectory({ USER: 'remote user' }, '/tmp'),
-      path.join('/tmp', 'dcmview-vscode-bridges-remote_user'),
+      bridgeRegistryDirectory({ HOME: '/home/research', USER: 'remote user' }, '/tmp'),
+      path.join('/home/research', '.local', 'state', 'dcmview', 'vscode-bridges'),
     );
   });
 
   test('matches shared bridge registry contract', () => {
     assert.strictEqual(BRIDGE_REGISTRY_MAX_AGE_MS, registryContract.ttlMs);
     assert.strictEqual(BRIDGE_REGISTRY_REFRESH_MS, registryContract.refreshMs);
+    assert.strictEqual(BRIDGE_REGISTRY_PRESENCE_CHECK_MS, registryContract.presenceCheckMs);
 
     for (const testCase of registryContract.registryDirs) {
       assert.strictEqual(bridgeRegistryDirectory(testCase.env, testCase.tmpDir), testCase.expected);
@@ -273,6 +277,47 @@ suite('dcmview extension', () => {
     }
   });
 
+  test('presence check republishes missing bridge registry file', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dcmview-registry-'));
+    const registryDir = path.join(root, 'bridges');
+    const bridge = { id: 'instance-1', url: 'http://127.0.0.1:4567', token: 'secret' };
+    try {
+      const firstPath = await writeBridgeRegistry(bridge, registryDir, ['/workspace'], 1000);
+      fs.unlinkSync(firstPath);
+      const secondPath = await ensureBridgeRegistryPresent(bridge, registryDir);
+      assert.strictEqual(secondPath, firstPath);
+      const entry = JSON.parse(fs.readFileSync(firstPath, 'utf8'));
+      assert.strictEqual(entry.instanceId, 'instance-1');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  test('validates client supplied bridge binaries', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'dcmview-client-bin-'));
+    try {
+      const binary = path.join(root, process.platform === 'win32' ? 'dcmview.exe' : 'dcmview');
+      const wrongName = path.join(root, 'viewer');
+      fs.writeFileSync(binary, '');
+      fs.writeFileSync(wrongName, '');
+      if (process.platform !== 'win32') {
+        fs.chmodSync(binary, 0o700);
+        fs.chmodSync(wrongName, 0o700);
+      }
+
+      assert.strictEqual(await clientBinaryPathIsTrusted(binary), true);
+      assert.strictEqual(await clientBinaryPathIsTrusted('relative/dcmview'), false);
+      assert.strictEqual(await clientBinaryPathIsTrusted(wrongName), false);
+
+      if (process.platform !== 'win32') {
+        fs.chmodSync(binary, 0o722);
+        assert.strictEqual(await clientBinaryPathIsTrusted(binary), false);
+      }
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   test('rejects untrusted unix registry directory metadata', () => {
     if (process.platform === 'win32' || typeof process.getuid !== 'function') {
       assert.strictEqual(registryDirectoryIsTrusted({ uid: 9999, mode: 0o777 } as fs.Stats), true);
@@ -294,6 +339,7 @@ suite('dcmview extension', () => {
     assert.ok(commands.includes('dcmview.openPath'));
     assert.ok(commands.includes('dcmview.openWorkspaceSelection'));
     assert.ok(commands.includes('dcmview.stopAll'));
+    assert.ok(commands.includes('dcmview.showBridgeStatus'));
   });
 
   test('contributes optional DICOM custom editor', () => {

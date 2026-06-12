@@ -19,6 +19,7 @@ const VSCODE_BRIDGE_URL_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_URL";
 const VSCODE_BRIDGE_TOKEN_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_TOKEN";
 const VSCODE_BRIDGE_BYPASS_ENV: &str = "DCMVIEW_VSCODE_BYPASS";
 const VSCODE_BRIDGE_REGISTRY_DIR_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR";
+const VSCODE_BRIDGE_DEBUG_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_DEBUG";
 const BRIDGE_REGISTRY_MAX_AGE_MS: u64 = 3 * 60 * 60 * 1000;
 
 #[derive(Debug, Parser)]
@@ -76,6 +77,8 @@ struct BridgeLaunchRequest {
     args: Vec<String>,
     cwd: String,
     wait: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    binary_path: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -110,8 +113,11 @@ struct BridgeRegistryEntry {
 enum BridgeLaunchError {
     #[error("failed to contact VS Code bridge: {0}")]
     Connect(String),
-    #[error("VS Code bridge returned {0}")]
-    Http(reqwest::StatusCode),
+    #[error("VS Code bridge returned {status}: {message}")]
+    Http {
+        status: reqwest::StatusCode,
+        message: String,
+    },
     #[error("failed to parse VS Code bridge launch response: {0}")]
     Decode(String),
     #[error("VS Code bridge request failed: {0}")]
@@ -292,6 +298,9 @@ async fn run_vscode_bridge_launch(
             .display()
             .to_string(),
         wait: false,
+        binary_path: env::current_exe()
+            .ok()
+            .map(|path| path.display().to_string()),
     };
 
     let mut last_error = None;
@@ -304,6 +313,7 @@ async fn run_vscode_bridge_launch(
                 if should_remove_registry_entry_after_launch_error(&error) {
                     remove_vscode_bridge_registry_endpoint(endpoint);
                 }
+                bridge_debug(&format!("endpoint {} failed: {error}", endpoint.url));
                 last_error = Some(anyhow::Error::from(error));
             }
         }
@@ -332,12 +342,31 @@ async fn launch_vscode_session(
         Err(error) => return Err(BridgeLaunchError::Request(error.to_string())),
     };
     if !response.status().is_success() {
-        return Err(BridgeLaunchError::Http(response.status()));
+        let status = response.status();
+        let message = bridge_error_response_message(response).await;
+        return Err(BridgeLaunchError::Http { status, message });
     }
     response
         .json::<BridgeLaunchResponse>()
         .await
         .map_err(|error| BridgeLaunchError::Decode(error.to_string()))
+}
+
+async fn bridge_error_response_message(response: reqwest::Response) -> String {
+    let status = response.status();
+    let Ok(text) = response.text().await else {
+        return status.to_string();
+    };
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text) {
+        if let Some(error) = value.get("error").and_then(|value| value.as_str()) {
+            return error.to_string();
+        }
+    }
+    if text.is_empty() {
+        status.to_string()
+    } else {
+        text
+    }
 }
 
 fn should_remove_registry_entry_after_launch_error(error: &BridgeLaunchError) -> bool {
@@ -393,19 +422,31 @@ fn discover_vscode_bridge_endpoints(
     registry_match: RegistryMatch,
 ) -> Vec<BridgeEndpoint> {
     if env::var(VSCODE_BRIDGE_BYPASS_ENV).as_deref() == Ok("1") {
+        bridge_debug("bridge discovery bypassed by DCMVIEW_VSCODE_BYPASS=1");
         return Vec::new();
     }
 
+    let mut endpoints = Vec::new();
     if let (Ok(url), Ok(token)) = (
         env::var(VSCODE_BRIDGE_URL_ENV),
         env::var(VSCODE_BRIDGE_TOKEN_ENV),
     ) {
         if !url.is_empty() && !token.is_empty() {
-            return vec![BridgeEndpoint { url, token }];
+            bridge_debug(&format!("accepted env endpoint {url}"));
+            endpoints.push(BridgeEndpoint { url, token });
         }
     }
 
-    discover_vscode_bridge_registry_endpoints(cwd, registry_match, now_unix_ms())
+    for endpoint in discover_vscode_bridge_registry_endpoints(cwd, registry_match, now_unix_ms()) {
+        if !endpoints.contains(&endpoint) {
+            endpoints.push(endpoint);
+        }
+    }
+    bridge_debug(&format!(
+        "discovered {} bridge endpoint(s)",
+        endpoints.len()
+    ));
+    endpoints
 }
 
 fn discover_vscode_bridge_registry_endpoints(
@@ -413,11 +454,44 @@ fn discover_vscode_bridge_registry_endpoints(
     registry_match: RegistryMatch,
     now_ms: u64,
 ) -> Vec<BridgeEndpoint> {
-    let registry_dir = vscode_bridge_registry_dir();
+    let mut endpoints = Vec::new();
+    for registry_dir in vscode_bridge_registry_dirs() {
+        for endpoint in discover_vscode_bridge_registry_endpoints_from_dir(
+            cwd,
+            registry_match,
+            now_ms,
+            &registry_dir,
+        ) {
+            if !endpoints.contains(&endpoint) {
+                endpoints.push(endpoint);
+            }
+        }
+    }
+    endpoints
+}
+
+fn discover_vscode_bridge_registry_endpoints_from_dir(
+    cwd: &Path,
+    registry_match: RegistryMatch,
+    now_ms: u64,
+    registry_dir: &Path,
+) -> Vec<BridgeEndpoint> {
+    bridge_debug(&format!(
+        "scanning bridge registry dir {}",
+        registry_dir.display()
+    ));
     if !registry_dir_is_trusted(&registry_dir) {
+        bridge_debug(&format!(
+            "registry dir untrusted or missing: {}",
+            registry_dir.display()
+        ));
         return Vec::new();
     }
     let Ok(entries) = fs::read_dir(&registry_dir) else {
+        bridge_debug(&format!(
+            "registry dir unreadable: {}",
+            registry_dir.display()
+        ));
         return Vec::new();
     };
     let cwd = normalized_path(cwd);
@@ -434,28 +508,53 @@ fn discover_vscode_bridge_registry_endpoints(
             continue;
         };
         if !is_supported_registry_version(&value) {
+            bridge_debug(&format!(
+                "registry entry skipped unsupported version: {}",
+                path.display()
+            ));
             continue;
         }
         let Ok(registry) = serde_json::from_value::<BridgeRegistryEntry>(value) else {
             let _ = fs::remove_file(&path);
+            bridge_debug(&format!(
+                "registry entry removed malformed v1: {}",
+                path.display()
+            ));
             continue;
         };
         if registry.bridge_url.is_empty() || registry.token.is_empty() {
+            bridge_debug(&format!(
+                "registry entry skipped missing endpoint: {}",
+                path.display()
+            ));
             continue;
         }
         let Some(created_at) = registry.created_at_ms else {
             let _ = fs::remove_file(&path);
+            bridge_debug(&format!(
+                "registry entry removed missing timestamp: {}",
+                path.display()
+            ));
             continue;
         };
         if is_expired_registry_entry(created_at, now_ms) {
             let _ = fs::remove_file(&path);
+            bridge_debug(&format!(
+                "registry entry removed expired: {}",
+                path.display()
+            ));
             continue;
         }
         let match_score =
             workspace_match_score(&cwd, registry.workspace_roots.as_deref().unwrap_or(&[]));
         if registry_match == RegistryMatch::RequireWorkspace && match_score == 0 {
+            bridge_debug(&format!(
+                "registry entry skipped workspace mismatch: {}",
+                path.display()
+            ));
             continue;
         }
+        bridge_debug(&format!("registry entry accepted: {}", path.display()));
         candidates.push((
             match_score,
             created_at,
@@ -520,7 +619,12 @@ fn is_expired_registry_entry(created_at_ms: u64, now_ms: u64) -> bool {
 }
 
 fn remove_vscode_bridge_registry_endpoint(endpoint: &BridgeEndpoint) {
-    let registry_dir = vscode_bridge_registry_dir();
+    for registry_dir in vscode_bridge_registry_dirs() {
+        remove_vscode_bridge_registry_endpoint_from_dir(endpoint, &registry_dir);
+    }
+}
+
+fn remove_vscode_bridge_registry_endpoint_from_dir(endpoint: &BridgeEndpoint, registry_dir: &Path) {
     if !registry_dir_is_trusted(&registry_dir) {
         return;
     }
@@ -544,23 +648,32 @@ fn remove_vscode_bridge_registry_endpoint(endpoint: &BridgeEndpoint) {
     }
 }
 
-fn vscode_bridge_registry_dir() -> PathBuf {
-    vscode_bridge_registry_dir_from_values(
-        env::var(VSCODE_BRIDGE_REGISTRY_DIR_ENV).ok().as_deref(),
+fn vscode_bridge_registry_dirs() -> Vec<PathBuf> {
+    if let Ok(configured) = env::var(VSCODE_BRIDGE_REGISTRY_DIR_ENV) {
+        if !configured.is_empty() {
+            return vec![PathBuf::from(configured)];
+        }
+    }
+    let mut dirs = vec![vscode_bridge_registry_dir_from_values(
+        None,
+        env::var("XDG_STATE_HOME").ok().as_deref(),
+        env::var("HOME").ok().as_deref(),
+    )];
+    dirs.extend(legacy_vscode_bridge_registry_dirs_from_values(
         env::var("XDG_RUNTIME_DIR").ok().as_deref(),
         env::var("USER")
             .or_else(|_| env::var("USERNAME"))
             .ok()
             .as_deref(),
         &env::temp_dir(),
-    )
+    ));
+    dedupe_paths(dirs)
 }
 
 fn vscode_bridge_registry_dir_from_values(
     configured: Option<&str>,
-    runtime_dir: Option<&str>,
-    user: Option<&str>,
-    tmp_dir: &Path,
+    state_home: Option<&str>,
+    home: Option<&str>,
 ) -> PathBuf {
     if let Some(configured) = configured {
         if !configured.is_empty() {
@@ -568,18 +681,68 @@ fn vscode_bridge_registry_dir_from_values(
         }
     }
 
+    if let Some(state_home) = state_home {
+        let state_home = PathBuf::from(state_home);
+        if state_home.is_absolute() {
+            return state_home.join("dcmview").join("vscode-bridges");
+        }
+    }
+
+    if let Some(home) = home {
+        let home = PathBuf::from(home);
+        if home.is_absolute() {
+            return home
+                .join(".local")
+                .join("state")
+                .join("dcmview")
+                .join("vscode-bridges");
+        }
+    }
+
+    env::var("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join(".local")
+        .join("state")
+        .join("dcmview")
+        .join("vscode-bridges")
+}
+
+fn legacy_vscode_bridge_registry_dirs_from_values(
+    runtime_dir: Option<&str>,
+    user: Option<&str>,
+    tmp_dir: &Path,
+) -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
     if let Some(runtime_dir) = runtime_dir {
         let runtime_dir = PathBuf::from(runtime_dir);
         if runtime_dir.is_absolute() {
-            return runtime_dir.join("dcmview").join("vscode-bridges");
+            dirs.push(runtime_dir.join("dcmview").join("vscode-bridges"));
         }
     }
 
     let user = user.unwrap_or("default");
-    tmp_dir.join(format!(
+    dirs.push(tmp_dir.join(format!(
         "dcmview-vscode-bridges-{}",
         safe_registry_segment(user)
-    ))
+    )));
+    dirs
+}
+
+fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    for path in paths {
+        if !result.contains(&path) {
+            result.push(path);
+        }
+    }
+    result
+}
+
+fn bridge_debug(message: &str) {
+    if env::var(VSCODE_BRIDGE_DEBUG_ENV).as_deref() == Ok("1") {
+        eprintln!("dcmview bridge: {message}");
+    }
 }
 
 fn safe_registry_segment(value: &str) -> String {
@@ -814,6 +977,7 @@ mod tests {
             args: vec!["scan.dcm".to_string()],
             cwd: "/workspace".to_string(),
             wait: false,
+            binary_path: None,
         };
 
         let value = serde_json::to_value(request).expect("bridge launch request serializes");
@@ -822,6 +986,7 @@ mod tests {
         assert_eq!(value["args"], serde_json::json!(["scan.dcm"]));
         assert_eq!(value["cwd"], "/workspace");
         assert_eq!(value["wait"], false);
+        assert_eq!(value.get("binaryPath"), None);
     }
 
     #[test]
@@ -996,33 +1161,32 @@ mod tests {
             let configured = env
                 .get(VSCODE_BRIDGE_REGISTRY_DIR_ENV)
                 .and_then(|value| value.as_str());
+            let state_home = env.get("XDG_STATE_HOME").and_then(|value| value.as_str());
+            let home = env.get("HOME").and_then(|value| value.as_str());
+            let actual = vscode_bridge_registry_dir_from_values(configured, state_home, home);
+            let expected = PathBuf::from(test_case["expected"].as_str().unwrap());
+            assert_eq!(
+                actual,
+                expected,
+                "registry dir contract case {:?}",
+                test_case["name"].as_str()
+            );
+        }
+        for test_case in contract["legacyRegistryDirs"].as_array().unwrap() {
+            let env = test_case["env"].as_object().unwrap();
             let runtime_dir = env.get("XDG_RUNTIME_DIR").and_then(|value| value.as_str());
             let user = env
                 .get("USER")
                 .or_else(|| env.get("USERNAME"))
                 .and_then(|value| value.as_str());
-            let actual = vscode_bridge_registry_dir_from_values(
-                configured,
+            let actual = legacy_vscode_bridge_registry_dirs_from_values(
                 runtime_dir,
                 user,
                 Path::new(test_case["tmpDir"].as_str().unwrap()),
             );
-            let expected = if configured.is_none()
-                && runtime_dir
-                    .map(|value| !Path::new(value).is_absolute())
-                    .unwrap_or(false)
-            {
-                Path::new(test_case["tmpDir"].as_str().unwrap()).join(format!(
-                    "dcmview-vscode-bridges-{}",
-                    safe_registry_segment(user.unwrap_or("default"))
-                ))
-            } else {
-                PathBuf::from(test_case["expected"].as_str().unwrap())
-            };
-            assert_eq!(
-                actual,
-                expected,
-                "registry dir contract case {:?}",
+            assert!(
+                actual.contains(&PathBuf::from(test_case["expected"].as_str().unwrap())),
+                "legacy registry dir contract case {:?}",
                 test_case["name"].as_str()
             );
         }
@@ -1076,7 +1240,7 @@ mod tests {
     }
 
     #[test]
-    fn bridge_discovery_prefers_environment_and_honors_bypass() {
+    fn bridge_discovery_uses_environment_then_registry_and_honors_bypass() {
         let _guard = ENV_LOCK.lock().expect("env lock");
         let _env_guard = EnvGuard::capture(&[
             VSCODE_BRIDGE_REGISTRY_DIR_ENV,
@@ -1090,7 +1254,7 @@ mod tests {
             serde_json::json!({
                 "bridgeUrl": "http://127.0.0.1:1111",
                 "token": "registry-token",
-                "workspaceRoots": [],
+                "workspaceRoots": [temp.path()],
                 "createdAtMs": now_unix_ms()
             })
             .to_string(),
@@ -1103,10 +1267,16 @@ mod tests {
         env::remove_var(VSCODE_BRIDGE_BYPASS_ENV);
         assert_eq!(
             discover_vscode_bridge_endpoints(temp.path(), RegistryMatch::RequireWorkspace),
-            vec![BridgeEndpoint {
-                url: "http://127.0.0.1:2222".to_string(),
-                token: "env-token".to_string(),
-            }]
+            vec![
+                BridgeEndpoint {
+                    url: "http://127.0.0.1:2222".to_string(),
+                    token: "env-token".to_string(),
+                },
+                BridgeEndpoint {
+                    url: "http://127.0.0.1:1111".to_string(),
+                    token: "registry-token".to_string(),
+                },
+            ]
         );
 
         env::set_var(VSCODE_BRIDGE_BYPASS_ENV, "1");
@@ -1203,7 +1373,10 @@ mod tests {
             &BridgeLaunchError::Connect("connection refused".to_string())
         ));
         assert!(!should_remove_registry_entry_after_launch_error(
-            &BridgeLaunchError::Http(reqwest::StatusCode::INTERNAL_SERVER_ERROR)
+            &BridgeLaunchError::Http {
+                status: reqwest::StatusCode::INTERNAL_SERVER_ERROR,
+                message: "failed".to_string(),
+            }
         ));
     }
 
