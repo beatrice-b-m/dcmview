@@ -117,6 +117,9 @@ pub struct FilesResponse {
     pub tunnelled: bool,
     pub tunnel_host: Option<String>,
     pub server_start_ms: u64,
+    pub scan_complete: bool,
+    pub scanned: usize,
+    pub skipped: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]

@@ -4,16 +4,16 @@ use dcmview::annotations;
 use dcmview::loader;
 use dcmview::pixels;
 use dcmview::server::{self, now_unix_ms, AppState, ServerConfig, TunnelConfig};
-use dcmview::types;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::{mpsc, Notify};
 
 const VSCODE_BRIDGE_URL_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_URL";
 const VSCODE_BRIDGE_TOKEN_ENV: &str = "DCMVIEW_VSCODE_BRIDGE_TOKEN";
@@ -162,23 +162,6 @@ async fn run() -> Result<i32> {
         .with_env_filter("info,jpeg2k=warn")
         .init();
 
-    let load_report = loader::discover(
-        &cli.paths,
-        loader::DiscoverOptions {
-            recursive: !cli.no_recursive,
-        },
-    )
-    .await
-    .context("failed to discover DICOM files")?;
-
-    print_load_summary(&load_report, &cli.paths);
-    let annotations = if let Some(path) = cli.annotations.as_ref() {
-        annotations::load_annotations_for_files(path, load_report.files.as_slice())
-            .with_context(|| format!("failed to load annotations from {}", path.display()))?
-    } else {
-        HashMap::new()
-    };
-
     let tunnel = if cli.tunnel {
         let host = cli
             .tunnel_host
@@ -192,20 +175,33 @@ async fn run() -> Result<i32> {
         None
     };
 
-    let file_summaries = server::file_summaries(load_report.files.as_slice());
+    let registry = server::FileRegistry::new();
+    let annotation_store = annotations::AnnotationStore::empty();
+    let shutdown_notify = Arc::new(Notify::new());
+    let exit_code = Arc::new(AtomicI32::new(0));
+
     let state = AppState {
-        files: Arc::new(load_report.files),
-        file_summaries,
+        registry: registry.clone(),
         pixel_cache: pixels::new_cache(),
         raw_cache: pixels::new_raw_cache(),
         tag_cache: Arc::new(Mutex::new(HashMap::new())),
-        annotations: annotations::AnnotationStore::new(annotations),
+        annotations: annotation_store.clone(),
         tunnel_info: None,
         tunnel_handle: None,
         server_start: Instant::now(),
         server_start_ms: now_unix_ms(),
         last_request: Arc::new(AtomicU64::new(now_unix_ms())),
     };
+
+    spawn_progressive_discovery(
+        cli.paths.clone(),
+        !cli.no_recursive,
+        cli.annotations.clone(),
+        registry,
+        annotation_store,
+        shutdown_notify.clone(),
+        exit_code.clone(),
+    );
 
     let run_result = server::run(
         ServerConfig {
@@ -215,13 +211,14 @@ async fn run() -> Result<i32> {
             open_browser: !cli.no_browser,
             startup_json: cli.startup_json,
             tunnel,
+            shutdown: Some(shutdown_notify),
         },
         state,
     )
     .await;
 
     match run_result {
-        Ok(()) => Ok(0),
+        Ok(()) => Ok(exit_code.load(Ordering::Relaxed)),
         Err(error) => {
             let message = error.to_string();
             if cli.port != 0
@@ -623,8 +620,100 @@ fn fallback_to_local_viewer(args: &[String]) -> Result<i32> {
     Ok(status.code().unwrap_or(1))
 }
 
-fn print_load_summary(report: &types::LoadReport, input_paths: &[PathBuf]) {
-    let recursive_note = if report.searched_recursive {
+fn spawn_progressive_discovery(
+    input_paths: Vec<PathBuf>,
+    recursive: bool,
+    annotations_path: Option<PathBuf>,
+    registry: server::FileRegistry,
+    annotation_store: annotations::AnnotationStore,
+    shutdown_notify: Arc<Notify>,
+    exit_code: Arc<AtomicI32>,
+) {
+    tokio::spawn(async move {
+        let (events_tx, mut events_rx) = mpsc::unbounded_channel();
+        let scan_paths = input_paths.clone();
+        let scan = tokio::spawn(async move {
+            loader::discover_progressive(
+                &scan_paths,
+                loader::DiscoverOptions { recursive },
+                events_tx,
+            )
+            .await
+        });
+
+        while let Some(event) = events_rx.recv().await {
+            registry.record_scanned();
+            match event {
+                loader::DiscoveryEvent::File(file) => {
+                    registry.insert(file);
+                }
+                loader::DiscoveryEvent::Skipped => {
+                    registry.record_skipped();
+                }
+            }
+        }
+
+        let scan_result = match scan.await {
+            Ok(result) => result,
+            Err(error) => Err(anyhow::anyhow!("loader worker panicked: {error}")),
+        };
+
+        registry.mark_scan_complete();
+        match scan_result {
+            Ok(report) => {
+                let files = registry.files_snapshot();
+                if files.is_empty() {
+                    eprintln!("dcmview: no valid DICOM files found");
+                    exit_code.store(1, Ordering::Relaxed);
+                    shutdown_notify.notify_one();
+                    return;
+                }
+
+                if let Some(path) = annotations_path.as_ref() {
+                    match annotations::load_annotations_for_files(path, files.as_slice())
+                        .with_context(|| {
+                            format!("failed to load annotations from {}", path.display())
+                        }) {
+                        Ok(annotations) => {
+                            if let Err(error) = annotation_store.replace_all(annotations) {
+                                eprintln!("{error:#}");
+                                exit_code.store(1, Ordering::Relaxed);
+                                shutdown_notify.notify_one();
+                                return;
+                            }
+                        }
+                        Err(error) => {
+                            eprintln!("{error:#}");
+                            exit_code.store(1, Ordering::Relaxed);
+                            shutdown_notify.notify_one();
+                            return;
+                        }
+                    }
+                }
+
+                print_progressive_load_summary(
+                    files.len(),
+                    report.skipped,
+                    report.searched_recursive,
+                    &input_paths,
+                );
+            }
+            Err(error) => {
+                eprintln!("failed to discover DICOM files: {error:#}");
+                exit_code.store(1, Ordering::Relaxed);
+                shutdown_notify.notify_one();
+            }
+        }
+    });
+}
+
+fn print_progressive_load_summary(
+    file_count: usize,
+    skipped: usize,
+    searched_recursive: bool,
+    input_paths: &[PathBuf],
+) {
+    let recursive_note = if searched_recursive {
         "searched recursively"
     } else {
         "searched top-level only"
@@ -635,13 +724,13 @@ fn print_load_summary(report: &types::LoadReport, input_paths: &[PathBuf]) {
         format!("{} path(s)", input_paths.len())
     };
 
-    if report.skipped == 0 {
-        if report.files.len() == 1 {
+    if skipped == 0 {
+        if file_count == 1 {
             println!("dcmview: loaded 1 DICOM file");
         } else {
             println!(
                 "dcmview: loaded {} DICOM file(s) from {} ({})",
-                report.files.len(),
+                file_count,
                 path_label,
                 recursive_note
             );
@@ -649,9 +738,9 @@ fn print_load_summary(report: &types::LoadReport, input_paths: &[PathBuf]) {
     } else {
         println!(
             "dcmview: loaded {} DICOM file(s) from {} ({} skipped — not valid DICOM, {})",
-            report.files.len(),
+            file_count,
             path_label,
-            report.skipped,
+            skipped,
             recursive_note
         );
     }

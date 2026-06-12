@@ -6,12 +6,27 @@ use rayon::prelude::*;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::task;
+use tokio::sync::mpsc;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
 pub struct DiscoverOptions {
     pub recursive: bool,
+}
+
+#[derive(Debug)]
+pub enum DiscoveryEvent {
+    File(FileEntry),
+    Skipped,
+}
+
+#[derive(Debug, Clone)]
+pub struct DiscoveryReport {
+    pub files_found: usize,
+    pub skipped: usize,
+    pub searched_recursive: bool,
 }
 
 pub async fn discover(paths: &[PathBuf], options: DiscoverOptions) -> Result<LoadReport> {
@@ -21,7 +36,18 @@ pub async fn discover(paths: &[PathBuf], options: DiscoverOptions) -> Result<Loa
         .context("loader worker panicked")?
 }
 
-fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<LoadReport> {
+pub async fn discover_progressive(
+    paths: &[PathBuf],
+    options: DiscoverOptions,
+    events: mpsc::UnboundedSender<DiscoveryEvent>,
+) -> Result<DiscoveryReport> {
+    let paths = paths.to_vec();
+    task::spawn_blocking(move || discover_progressive_blocking(&paths, &options, events))
+        .await
+        .context("loader worker panicked")?
+}
+
+fn collect_candidates(paths: &[PathBuf], options: &DiscoverOptions) -> (Vec<PathBuf>, usize) {
     let mut candidates = Vec::new();
     let mut skipped = 0_usize;
 
@@ -59,6 +85,12 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
         );
     }
 
+    (candidates, skipped)
+}
+
+fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<LoadReport> {
+    let (candidates, mut skipped) = collect_candidates(paths, options);
+
     let processed: Vec<_> = candidates
         .par_iter()
         .map(|candidate| build_entry(candidate))
@@ -89,6 +121,44 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
     Ok(LoadReport {
         files,
         skipped,
+        searched_recursive: options.recursive,
+    })
+}
+
+fn discover_progressive_blocking(
+    paths: &[PathBuf],
+    options: &DiscoverOptions,
+    events: mpsc::UnboundedSender<DiscoveryEvent>,
+) -> Result<DiscoveryReport> {
+    let (candidates, initial_skipped) = collect_candidates(paths, options);
+    for _ in 0..initial_skipped {
+        let _ = events.send(DiscoveryEvent::Skipped);
+    }
+
+    let files_found = AtomicUsize::new(0);
+    let skipped = AtomicUsize::new(initial_skipped);
+
+    candidates.par_iter().for_each_with(events, |events, candidate| {
+        match build_entry(candidate) {
+            Ok(Some(entry)) => {
+                files_found.fetch_add(1, Ordering::Relaxed);
+                let _ = events.send(DiscoveryEvent::File(entry));
+            }
+            Ok(None) => {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let _ = events.send(DiscoveryEvent::Skipped);
+            }
+            Err(error) => {
+                skipped.fetch_add(1, Ordering::Relaxed);
+                let _ = events.send(DiscoveryEvent::Skipped);
+                eprintln!("dcmview: warning — failed to inspect DICOM: {error}");
+            }
+        }
+    });
+
+    Ok(DiscoveryReport {
+        files_found: files_found.load(Ordering::Relaxed),
+        skipped: skipped.load(Ordering::Relaxed),
         searched_recursive: options.recursive,
     })
 }

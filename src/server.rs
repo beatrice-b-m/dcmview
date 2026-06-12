@@ -22,15 +22,15 @@ use dicom_object::{open_file, InMemDicomObject};
 use rust_embed::RustEmbed;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tokio::net::TcpListener;
+use tokio::sync::Notify;
 
 #[derive(Clone)]
 pub struct AppState {
-    pub files: Arc<Vec<FileEntry>>,
-    pub file_summaries: Arc<Vec<FileSummary>>,
+    pub registry: FileRegistry,
     pub pixel_cache: Arc<Mutex<FrameCache>>,
     pub raw_cache: Arc<Mutex<RawFrameCache>>,
     pub tag_cache: Arc<Mutex<HashMap<usize, Vec<TagNode>>>>,
@@ -42,8 +42,122 @@ pub struct AppState {
     pub last_request: Arc<AtomicU64>,
 }
 
-pub fn file_summaries(files: &[FileEntry]) -> Arc<Vec<FileSummary>> {
-    Arc::new(files.iter().map(FileSummary::from).collect())
+#[derive(Clone)]
+pub struct FileRegistry {
+    inner: Arc<RwLock<FileRegistryInner>>,
+    scanned: Arc<AtomicUsize>,
+    skipped: Arc<AtomicUsize>,
+    scan_complete: Arc<AtomicBool>,
+    notify: Arc<Notify>,
+}
+
+#[derive(Default)]
+struct FileRegistryInner {
+    files: Vec<FileEntry>,
+    summaries: Vec<FileSummary>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RegistryStatus {
+    pub file_count: usize,
+    pub scanned: usize,
+    pub skipped: usize,
+    pub scan_complete: bool,
+}
+
+impl FileRegistry {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(FileRegistryInner::default())),
+            scanned: Arc::new(AtomicUsize::new(0)),
+            skipped: Arc::new(AtomicUsize::new(0)),
+            scan_complete: Arc::new(AtomicBool::new(false)),
+            notify: Arc::new(Notify::new()),
+        }
+    }
+
+    pub fn from_files(files: Vec<FileEntry>) -> Self {
+        let registry = Self::new();
+        for file in files {
+            registry.insert(file);
+            registry.record_scanned();
+        }
+        registry.mark_scan_complete();
+        registry
+    }
+
+    pub fn insert(&self, mut file: FileEntry) -> usize {
+        let mut inner = self.inner.write().expect("file registry lock poisoned");
+        let index = inner.files.len();
+        file.index = index;
+        let summary = FileSummary::from(&file);
+        inner.files.push(file);
+        inner.summaries.push(summary);
+        drop(inner);
+        self.notify.notify_waiters();
+        index
+    }
+
+    pub fn record_scanned(&self) {
+        self.scanned.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn record_skipped(&self) {
+        self.skipped.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub fn mark_scan_complete(&self) {
+        self.scan_complete.store(true, Ordering::Relaxed);
+        self.notify.notify_waiters();
+    }
+
+    pub async fn changed(&self) {
+        self.notify.notified().await;
+    }
+
+    pub fn get(&self, index: usize) -> Option<FileEntry> {
+        self.inner
+            .read()
+            .expect("file registry lock poisoned")
+            .files
+            .get(index)
+            .cloned()
+    }
+
+    pub fn files_snapshot(&self) -> Vec<FileEntry> {
+        self.inner
+            .read()
+            .expect("file registry lock poisoned")
+            .files
+            .clone()
+    }
+
+    pub fn summaries_snapshot(&self) -> Vec<FileSummary> {
+        self.inner
+            .read()
+            .expect("file registry lock poisoned")
+            .summaries
+            .clone()
+    }
+
+    pub fn status(&self) -> RegistryStatus {
+        let file_count = self
+            .inner
+            .read()
+            .expect("file registry lock poisoned")
+            .files
+            .len();
+        RegistryStatus {
+            file_count,
+            scanned: self.scanned.load(Ordering::Relaxed),
+            skipped: self.skipped.load(Ordering::Relaxed),
+            scan_complete: self.scan_complete.load(Ordering::Relaxed),
+        }
+    }
+}
+
+pub fn file_summaries(files: &[FileEntry]) -> Vec<FileSummary> {
+    files.iter().map(FileSummary::from).collect()
 }
 
 #[derive(Debug, Clone)]
@@ -60,6 +174,7 @@ pub struct ServerConfig {
     pub open_browser: bool,
     pub startup_json: bool,
     pub tunnel: Option<TunnelConfig>,
+    pub shutdown: Option<Arc<Notify>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -140,9 +255,7 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
     }
 
     if config.open_browser {
-        if let Err(error) = open::that(&server_url) {
-            eprintln!("dcmview: warning — failed to open browser: {error}");
-        }
+        spawn_browser_opener(server_url.clone(), state.registry.clone());
     }
 
     println!("dcmview: press Ctrl+C to stop");
@@ -156,9 +269,10 @@ pub async fn run(config: ServerConfig, mut state: AppState) -> Result<()> {
     }
 
     let tunnel_handle = state.tunnel_handle.clone();
+    let shutdown_notify = config.shutdown.clone();
     let app = router(state);
     axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal(tunnel_handle))
+        .with_graceful_shutdown(shutdown_signal(tunnel_handle, shutdown_notify))
         .await
         .context("server failed")
 }
@@ -209,20 +323,25 @@ pub fn startup_event_json(server_url: &str, host: &str, port: u16) -> serde_json
 
 async fn health_handler(State(state): State<AppState>) -> Json<HealthResponse> {
     touch_request(&state);
+    let status = state.registry.status();
     Json(HealthResponse {
         status: "ok",
-        file_count: state.files.len(),
+        file_count: status.file_count,
         server_start_ms: state.server_start_ms,
     })
 }
 
 async fn files_handler(State(state): State<AppState>) -> Json<FilesResponse> {
     touch_request(&state);
+    let status = state.registry.status();
     Json(FilesResponse {
-        files: (*state.file_summaries).clone(),
+        files: state.registry.summaries_snapshot(),
         tunnelled: state.tunnel_info.is_some(),
         tunnel_host: state.tunnel_info.as_ref().map(|t| t.tunnel_host.clone()),
         server_start_ms: state.server_start_ms,
+        scan_complete: status.scan_complete,
+        scanned: status.scanned,
+        skipped: status.skipped,
     })
 }
 
@@ -232,7 +351,7 @@ async fn info_handler(
 ) -> Result<Json<FrameInfo>, ApiError> {
     touch_request(&state);
     let file = state
-        .files
+        .registry
         .get(index)
         .ok_or_else(|| ApiError::not_found("file index out of range"))?;
     Ok(Json(FrameInfo {
@@ -250,7 +369,7 @@ async fn annotations_handler(
     Path(index): Path<usize>,
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
     touch_request(&state);
-    if state.files.get(index).is_none() {
+    if state.registry.get(index).is_none() {
         return Err(ApiError::not_found("file index out of range"));
     }
 
@@ -269,13 +388,13 @@ async fn update_annotations_handler(
 ) -> Result<Json<EmbedRoiAnnotations>, ApiError> {
     touch_request(&state);
     let file = state
-        .files
+        .registry
         .get(index)
         .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
     let canonical = state
         .annotations
-        .replace_for_file(file, annotations)
+        .replace_for_file(&file, annotations)
         .map_err(|error| ApiError::bad_request(error.to_string()))?;
 
     Ok(Json(canonical))
@@ -283,9 +402,10 @@ async fn update_annotations_handler(
 
 async fn export_annotations_handler(State(state): State<AppState>) -> Result<Response, ApiError> {
     touch_request(&state);
+    let files = state.registry.files_snapshot();
     let csv = state
         .annotations
-        .export_embed_csv(state.files.as_slice())
+        .export_embed_csv(files.as_slice())
         .map_err(|error| ApiError::internal(error.to_string()))?;
     let mut response = Response::new(axum::body::Body::from(csv));
     let headers = response.headers_mut();
@@ -312,8 +432,9 @@ async fn frame_handler(
         .and_then(|value| value.to_str().ok())
         .map(ToString::to_string);
 
+    let files = state.registry.files_snapshot();
     let frame_response = pixels::load_frame(
-        state.files.as_slice(),
+        files.as_slice(),
         state.pixel_cache.clone(),
         FrameRequest {
             file_index: index,
@@ -349,8 +470,9 @@ async fn raw_frame_handler(
 ) -> Result<Response, ApiError> {
     touch_request(&state);
 
+    let files = state.registry.files_snapshot();
     let raw_response = pixels::load_raw_frame(
-        state.files.as_slice(),
+        files.as_slice(),
         state.raw_cache.clone(),
         RawFrameRequest {
             file_index: index,
@@ -422,7 +544,7 @@ async fn tags_handler(
 ) -> Result<Json<Vec<TagNode>>, ApiError> {
     touch_request(&state);
     let file = state
-        .files
+        .registry
         .get(index)
         .ok_or_else(|| ApiError::not_found("file index out of range"))?;
 
@@ -697,7 +819,28 @@ fn spawn_idle_timeout_watcher(
     });
 }
 
-async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
+fn spawn_browser_opener(server_url: String, registry: FileRegistry) {
+    tokio::spawn(async move {
+        loop {
+            let status = registry.status();
+            if status.file_count > 0 {
+                if let Err(error) = open::that(&server_url) {
+                    eprintln!("dcmview: warning — failed to open browser: {error}");
+                }
+                return;
+            }
+            if status.scan_complete {
+                return;
+            }
+            registry.changed().await;
+        }
+    });
+}
+
+async fn shutdown_signal(
+    tunnel_handle: Option<Arc<TunnelHandle>>,
+    shutdown_notify: Option<Arc<Notify>>,
+) {
     let ctrl_c = async {
         tokio::signal::ctrl_c().await.expect("ctrl+c handler");
     };
@@ -722,10 +865,19 @@ async fn shutdown_signal(tunnel_handle: Option<Arc<TunnelHandle>>) {
     #[cfg(not(unix))]
     let terminate = std::future::pending::<()>();
 
-    tokio::select! {
-        _ = ctrl_c => {},
-        _ = ctrl_break => {},
-        _ = terminate => {},
+    if let Some(shutdown_notify) = shutdown_notify {
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = ctrl_break => {},
+            _ = terminate => {},
+            _ = shutdown_notify.notified() => {},
+        }
+    } else {
+        tokio::select! {
+            _ = ctrl_c => {},
+            _ = ctrl_break => {},
+            _ = terminate => {},
+        }
     }
 
     if let Some(handle) = tunnel_handle {

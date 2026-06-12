@@ -37,11 +37,13 @@
 	let {
 		files,
 		activeFileIndex,
+		scanComplete = true,
 		collapsed = $bindable(),
 		onopenfile,
 	}: {
 		files: FileSummary[];
 		activeFileIndex: number | null;
+		scanComplete?: boolean;
 		collapsed: boolean;
 		onopenfile: (index: number) => void;
 	} = $props();
@@ -380,6 +382,9 @@
 			{#if filterActive}
 				<div class="filter-result">showing {filteredFiles.length} of {files.length} images</div>
 			{/if}
+			{#if !scanComplete}
+				<div class="scan-progress">indexed {files.length} file{files.length === 1 ? "" : "s"}...</div>
+			{/if}
 		</div>
 		<div class="tree" role="tree" aria-label="DICOM file hierarchy">
 			{#each tree as patient}
@@ -521,7 +526,8 @@
 		color: var(--text-muted);
 	}
 
-	.filter-result {
+	.filter-result,
+	.scan-progress {
 		color: var(--text-muted);
 		font-size: 0.72rem;
 		line-height: 1.25;

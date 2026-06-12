@@ -1,6 +1,6 @@
 use dcmview::annotations::AnnotationStore;
 use dcmview::pixels;
-use dcmview::server::{now_unix_ms, AppState};
+use dcmview::server::{now_unix_ms, AppState, FileRegistry};
 use dcmview::types::FileEntry;
 use dicom_core::value::PixelFragmentSequence;
 use dicom_core::{DataElement, PrimitiveValue, VR};
@@ -122,10 +122,12 @@ pub fn grayscale_jpeg_fragment_16x16(seed: u8) -> Vec<u8> {
 }
 
 pub fn app_state(files: Vec<FileEntry>) -> AppState {
-    let file_summaries = dcmview::server::file_summaries(files.as_slice());
+    app_state_with_registry(FileRegistry::from_files(files))
+}
+
+pub fn app_state_with_registry(registry: FileRegistry) -> AppState {
     AppState {
-        files: Arc::new(files),
-        file_summaries,
+        registry,
         pixel_cache: pixels::new_cache(),
         raw_cache: pixels::new_raw_cache(),
         tag_cache: Arc::new(Mutex::new(HashMap::new())),

@@ -45,7 +45,15 @@ async fn json_endpoints_match_frontend_contract_shapes() {
     let files: Value = test_server.get("/api/files").await.json();
     assert_object_keys(
         &files,
-        &["files", "server_start_ms", "tunnel_host", "tunnelled"],
+        &[
+            "files",
+            "scan_complete",
+            "scanned",
+            "server_start_ms",
+            "skipped",
+            "tunnel_host",
+            "tunnelled",
+        ],
     );
     let file = &files["files"].as_array().expect("files array")[0];
     assert_object_keys(

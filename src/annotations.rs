@@ -59,6 +59,15 @@ impl AnnotationStore {
             .unwrap_or_else(EmbedRoiAnnotations::empty))
     }
 
+    pub fn replace_all(&self, annotations: AnnotationIndexMap) -> Result<()> {
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("annotations store lock poisoned"))?;
+        *store = annotations;
+        Ok(())
+    }
+
     pub fn replace_for_file(
         &self,
         file: &FileEntry,

@@ -2,6 +2,7 @@ use super::support;
 use axum::http::{header, HeaderValue};
 use axum_test::TestServer;
 use dcmview::server;
+use dcmview::server::FileRegistry;
 use serde_json::{json, Value};
 use tempfile::tempdir;
 
@@ -107,6 +108,60 @@ async fn health_endpoint_reports_ready_state() {
             .expect("server_start_ms should be a number")
             > 0
     );
+}
+
+#[tokio::test]
+async fn file_registry_serves_snapshots_while_scan_is_incomplete() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("mid-scan.dcm");
+    support::write_uncompressed_u16_dicom(
+        &path,
+        "1.2.840.10008.1.2.1",
+        2,
+        2,
+        vec![0, 1000, 2000, 3000],
+        Some("1500"),
+        Some("3000"),
+    );
+
+    let registry = FileRegistry::new();
+    let app = server::router(support::app_state_with_registry(registry.clone()));
+    let test_server = TestServer::new(app);
+
+    let initial_health: Value = test_server.get("/api/health").await.json();
+    assert_eq!(initial_health["file_count"], 0);
+
+    let initial_files: Value = test_server.get("/api/files").await.json();
+    assert_eq!(initial_files["scan_complete"], false);
+    assert_eq!(initial_files["files"].as_array().expect("files array").len(), 0);
+
+    let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
+    entry.rows = 2;
+    entry.columns = 2;
+    entry.default_window = Some(dcmview::types::WindowPreset {
+        center: 1500.0,
+        width: 3000.0,
+    });
+    registry.record_scanned();
+    registry.insert(entry);
+
+    let mid_files: Value = test_server.get("/api/files").await.json();
+    assert_eq!(mid_files["scan_complete"], false);
+    assert_eq!(mid_files["scanned"], 1);
+    let mid_file = &mid_files["files"].as_array().expect("files array")[0];
+    assert_eq!(mid_file["index"], 0);
+
+    let info = test_server.get("/api/file/0/info").await;
+    info.assert_status_ok();
+    let tags = test_server.get("/api/file/0/tags").await;
+    tags.assert_status_ok();
+    let frame = test_server.get("/api/file/0/frame/0").await;
+    frame.assert_status_ok();
+
+    registry.mark_scan_complete();
+    let final_files: Value = test_server.get("/api/files").await.json();
+    assert_eq!(final_files["scan_complete"], true);
+    assert_eq!(final_files["files"][0]["index"], mid_file["index"]);
 }
 
 #[tokio::test]

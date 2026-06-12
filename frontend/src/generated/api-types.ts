@@ -39,6 +39,9 @@ export interface FilesResponse {
 	tunnelled: boolean;
 	tunnel_host: string | null;
 	server_start_ms: number;
+	scan_complete: boolean;
+	scanned: number;
+	skipped: number;
 }
 
 export interface FrameInfo {

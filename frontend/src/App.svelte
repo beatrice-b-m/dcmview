@@ -226,6 +226,13 @@
 		return filesResponse?.files.find((file) => file.index === fileIndex) ?? null;
 	}
 
+	function applyFilesResponse(response: FilesResponse) {
+		filesResponse = response;
+		if (activeFileIndex === null && openTabs.length === 0 && response.files.length > 0) {
+			openOrActivateFile(response.files[0].index);
+		}
+	}
+
 	function defaultWindowForFile(fileIndex: number): WindowPreset | null {
 		const window = fileByIndex(fileIndex)?.default_window ?? null;
 		if (!window || !Number.isFinite(window.center) || !Number.isFinite(window.width) || window.width <= 0) {
@@ -312,16 +319,32 @@
 		return () => window.removeEventListener('keydown', handleKey);
 	});
 
-	onMount(async () => {
-		try {
-			const response = await fetchFiles();
-			filesResponse = response;
-			if (response.files.length > 0) {
-				openOrActivateFile(response.files[0].index);
+	onMount(() => {
+		let cancelled = false;
+		let pollTimer: number | null = null;
+
+		const pollFiles = async () => {
+			try {
+				const response = await fetchFiles();
+				if (cancelled) return;
+				applyFilesResponse(response);
+				if (!response.scan_complete) {
+					pollTimer = window.setTimeout(pollFiles, 500);
+				}
+			} catch (error) {
+				if (!filesResponse) {
+					loadError = error instanceof Error ? error.message : String(error);
+				}
 			}
-		} catch (error) {
-			loadError = error instanceof Error ? error.message : String(error);
-		}
+		};
+
+		pollFiles();
+		return () => {
+			cancelled = true;
+			if (pollTimer !== null) {
+				window.clearTimeout(pollTimer);
+			}
+		};
 	});
 </script>
 
@@ -362,6 +385,7 @@
 			<FileNavigator
 				files={filesResponse.files}
 				activeFileIndex={activeFileIndex}
+				scanComplete={filesResponse.scan_complete}
 				bind:collapsed={fileNavigatorCollapsed}
 				onopenfile={openOrActivateFile}
 			/>
