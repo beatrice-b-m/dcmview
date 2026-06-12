@@ -551,6 +551,16 @@ class WrapperTests(unittest.TestCase):
 
 		self.assertEqual([list(endpoint) for endpoint in endpoints], contract["ordering"]["expectedAllowAny"])
 
+	def test_bridge_registry_path_join_preserves_posix_style_inputs(self) -> None:
+		self.assertEqual(
+			wrapper._join_registry_path("/run/user/1000", "dcmview", "vscode-bridges"),
+			"/run/user/1000/dcmview/vscode-bridges",
+		)
+		self.assertEqual(
+			wrapper._join_registry_path("/tmp", "dcmview-vscode-bridges-remote_user_example"),
+			"/tmp/dcmview-vscode-bridges-remote_user_example",
+		)
+
 	def test_bridge_registry_discovery_ignores_invalid_entries(self) -> None:
 		with tempfile.TemporaryDirectory() as tmp:
 			registry = Path(tmp)

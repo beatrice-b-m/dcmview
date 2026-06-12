@@ -484,14 +484,16 @@ def _registry_dir_is_trusted(
 	stat_result: Optional[os.stat_result] = None,
 	euid: Optional[int] = None,
 ) -> bool:
-	if _is_windows() or not hasattr(os, "geteuid"):
+	if _is_windows():
 		return True
+	if euid is None:
+		if not hasattr(os, "geteuid"):
+			return True
+		euid = os.geteuid()
 	try:
 		stat_result = path.stat() if stat_result is None else stat_result
 	except OSError:
 		return False
-	if euid is None:
-		euid = os.geteuid()
 	uid = getattr(stat_result, "st_uid", euid)
 	mode = getattr(stat_result, "st_mode", 0)
 	return uid == euid and mode & 0o022 == 0
@@ -537,10 +539,20 @@ def _bridge_registry_dir() -> str:
 
 	runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
 	if runtime_dir and os.path.isabs(runtime_dir):
-		return str(Path(runtime_dir) / "dcmview" / "vscode-bridges")
+		return _join_registry_path(runtime_dir, "dcmview", "vscode-bridges")
 
 	user = os.environ.get("USER") or os.environ.get("USERNAME") or "default"
-	return str(Path(tempfile.gettempdir()) / f"dcmview-vscode-bridges-{_safe_registry_segment(user)}")
+	return _join_registry_path(
+		tempfile.gettempdir(),
+		f"dcmview-vscode-bridges-{_safe_registry_segment(user)}",
+	)
+
+
+def _join_registry_path(base: str, *segments: str) -> str:
+	if "/" in base and "\\" not in base:
+		parts = [base.rstrip("/"), *(segment.strip("/") for segment in segments)]
+		return "/".join(part for part in parts if part)
+	return str(Path(base).joinpath(*segments))
 
 
 def _safe_registry_segment(value: str) -> str:
