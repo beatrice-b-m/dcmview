@@ -30,6 +30,15 @@
       },
       "tmpDir": "/tmp",
       "expected": "/home/research/.local/state/dcmview/vscode-bridges"
+    },
+    {
+      "name": "userprofile fallback",
+      "env": {
+        "USERPROFILE": "/Users/research",
+        "USERNAME": "research"
+      },
+      "tmpDir": "/tmp",
+      "expected": "/Users/research/.local/state/dcmview/vscode-bridges"
     }
   ],
   "legacyRegistryDirs": [

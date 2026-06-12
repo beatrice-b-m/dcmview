@@ -658,6 +658,7 @@ fn vscode_bridge_registry_dirs() -> Vec<PathBuf> {
         None,
         env::var("XDG_STATE_HOME").ok().as_deref(),
         env::var("HOME").ok().as_deref(),
+        env::var("USERPROFILE").ok().as_deref(),
     )];
     dirs.extend(legacy_vscode_bridge_registry_dirs_from_values(
         env::var("XDG_RUNTIME_DIR").ok().as_deref(),
@@ -674,6 +675,7 @@ fn vscode_bridge_registry_dir_from_values(
     configured: Option<&str>,
     state_home: Option<&str>,
     home: Option<&str>,
+    user_profile: Option<&str>,
 ) -> PathBuf {
     if let Some(configured) = configured {
         if !configured.is_empty() {
@@ -699,9 +701,18 @@ fn vscode_bridge_registry_dir_from_values(
         }
     }
 
-    env::var("HOME")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("."))
+    if let Some(user_profile) = user_profile {
+        let user_profile = PathBuf::from(user_profile);
+        if registry_env_path_is_absolute(&user_profile) {
+            return user_profile
+                .join(".local")
+                .join("state")
+                .join("dcmview")
+                .join("vscode-bridges");
+        }
+    }
+
+    PathBuf::from(".")
         .join(".local")
         .join("state")
         .join("dcmview")
@@ -1083,6 +1094,7 @@ mod tests {
             VSCODE_BRIDGE_URL_ENV,
             VSCODE_BRIDGE_TOKEN_ENV,
             VSCODE_BRIDGE_BYPASS_ENV,
+            "USERPROFILE",
         ]);
         let temp = tempfile::tempdir().expect("tempdir");
         let workspace = temp.path().join("workspace");
@@ -1150,6 +1162,7 @@ mod tests {
             VSCODE_BRIDGE_URL_ENV,
             VSCODE_BRIDGE_TOKEN_ENV,
             VSCODE_BRIDGE_BYPASS_ENV,
+            "USERPROFILE",
         ]);
         let contract: serde_json::Value = serde_json::from_str(include_str!(
             "../docs/contracts/vscode-bridge-registry.json"
@@ -1167,7 +1180,9 @@ mod tests {
                 .and_then(|value| value.as_str());
             let state_home = env.get("XDG_STATE_HOME").and_then(|value| value.as_str());
             let home = env.get("HOME").and_then(|value| value.as_str());
-            let actual = vscode_bridge_registry_dir_from_values(configured, state_home, home);
+            let user_profile = env.get("USERPROFILE").and_then(|value| value.as_str());
+            let actual =
+                vscode_bridge_registry_dir_from_values(configured, state_home, home, user_profile);
             let expected = PathBuf::from(test_case["expected"].as_str().unwrap());
             assert_eq!(
                 actual,
@@ -1240,6 +1255,20 @@ mod tests {
         assert_eq!(
             endpoint_pairs(&require_workspace),
             contract["ordering"]["expectedRequireWorkspace"]
+        );
+    }
+
+    #[test]
+    fn bridge_registry_dir_value_helper_has_deterministic_last_resort() {
+        let actual = vscode_bridge_registry_dir_from_values(None, None, None, None);
+
+        assert_eq!(
+            actual,
+            PathBuf::from(".")
+                .join(".local")
+                .join("state")
+                .join("dcmview")
+                .join("vscode-bridges")
         );
     }
 
