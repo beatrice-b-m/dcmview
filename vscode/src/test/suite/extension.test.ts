@@ -7,6 +7,7 @@ import * as vscode from 'vscode';
 import {
   BRIDGE_REGISTRY_MAX_AGE_MS,
   BRIDGE_REGISTRY_REFRESH_MS,
+  DICOM_CUSTOM_EDITOR_VIEW_TYPE,
   binaryCandidates,
   bridgeRegistryDirectory,
   bridgeRegistryEntry,
@@ -47,6 +48,9 @@ const bridgeContract = JSON.parse(
 );
 const registryContract = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, '../../../../docs/contracts/vscode-bridge-registry.json'), 'utf8'),
+);
+const extensionManifest = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8'),
 );
 
 suite('dcmview extension', () => {
@@ -290,5 +294,23 @@ suite('dcmview extension', () => {
     assert.ok(commands.includes('dcmview.openPath'));
     assert.ok(commands.includes('dcmview.openWorkspaceSelection'));
     assert.ok(commands.includes('dcmview.stopAll'));
+  });
+
+  test('contributes optional DICOM custom editor', () => {
+    const editors = extensionManifest.contributes.customEditors;
+    assert.ok(Array.isArray(editors));
+
+    const editor = editors.find(
+      (candidate: { viewType?: string }) => candidate.viewType === DICOM_CUSTOM_EDITOR_VIEW_TYPE,
+    );
+
+    assert.ok(editor, 'DICOM custom editor contribution should be present');
+    assert.strictEqual(editor.displayName, 'dcmview');
+    assert.strictEqual(editor.priority, 'option');
+    assert.deepStrictEqual(
+      editor.selector.map((item: { filenamePattern: string }) => item.filenamePattern),
+      ['*.dcm', '*.dicom', '*.ima'],
+    );
+    assert.ok(extensionManifest.activationEvents.includes(`onCustomEditor:${DICOM_CUSTOM_EDITOR_VIEW_TYPE}`));
   });
 });

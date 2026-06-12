@@ -48,6 +48,9 @@ host for notebook kernels whose cwd may be outside the workspace; pass
 4. Choose `Open with dcmview`.
 5. Confirm the dcmview panel opens, frame navigation works, and closing the
    panel stops the spawned server.
+6. Open the same fixture with `Reopen With...` and choose `dcmview`.
+7. Confirm the readonly editor tab opens, frame navigation works, and closing
+   the tab stops the spawned server.
 
 Folder testing uses the same context menu action. Use `tests/fixtures/` to
 verify multi-file discovery.
@@ -85,6 +88,11 @@ Python wrapper path without extension interception.
 - `dcmview: Open with dcmview` opens selected files and folders.
 - `dcmview: Open Workspace with dcmview` opens the selected workspace folder.
 - `dcmview: Stop All dcmview Sessions` terminates all running child processes.
+- `Reopen With...` offers `dcmview` for `*.dcm`, `*.dicom`, and `*.ima` files.
+- Setting `dcmview` as the default editor for matching DICOM extensions makes
+  double-click open those files in a dcmview editor tab.
+- Extensionless DICOM files still open through the explicit context menu
+  command.
 - Annotation export from the iframe downloads or prompts correctly in the local
   VS Code build.
 - `dcmview.binaryPath` overrides the repo debug binary.

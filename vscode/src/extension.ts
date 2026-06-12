@@ -8,6 +8,7 @@ import * as vscode from 'vscode';
 
 const STARTUP_PREFIX = 'dcmview: server running at ';
 const STARTUP_EVENT_TYPE = 'server_started';
+export const DICOM_CUSTOM_EDITOR_VIEW_TYPE = 'dcmview.dicomViewer';
 const BRIDGE_BYPASS_ENV = 'DCMVIEW_VSCODE_BYPASS';
 const BRIDGE_REGISTRY_DIR_ENV = 'DCMVIEW_VSCODE_BRIDGE_REGISTRY_DIR';
 const BRIDGE_TOKEN_ENV = 'DCMVIEW_VSCODE_BRIDGE_TOKEN';
@@ -39,6 +40,46 @@ interface RunningSession {
   readonly url: string;
   readonly exitCode: Promise<number>;
   stopped: boolean;
+}
+
+class DicomCustomDocument implements vscode.CustomDocument {
+  constructor(readonly uri: vscode.Uri) {}
+
+  dispose(): void {
+    // Session cleanup is tied to each custom editor webview panel.
+  }
+}
+
+class DicomCustomEditorProvider implements vscode.CustomReadonlyEditorProvider<DicomCustomDocument> {
+  constructor(private readonly context: vscode.ExtensionContext) {}
+
+  openCustomDocument(uri: vscode.Uri): DicomCustomDocument {
+    if (uri.scheme !== 'file') {
+      throw new Error('dcmview can only open file-system paths.');
+    }
+    return new DicomCustomDocument(uri);
+  }
+
+  async resolveCustomEditor(
+    document: DicomCustomDocument,
+    webviewPanel: vscode.WebviewPanel,
+  ): Promise<void> {
+    webviewPanel.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.context.extensionUri],
+    };
+    const settings = readSettings();
+    const output = getOutputChannel();
+    const filePath = document.uri.fsPath;
+
+    try {
+      const binary = await resolveBinaryPath(this.context.extensionUri.fsPath, settings.binaryPath);
+      await startPathSessionInPanel(binary, [filePath], settings, output, webviewPanel);
+    } catch (error) {
+      output.appendLine(formatError(error));
+      throw error;
+    }
+  }
 }
 
 interface BridgeServer {
@@ -100,6 +141,10 @@ export function activate(context: vscode.ExtensionContext): void {
       await stopAllSessions();
       vscode.window.showInformationMessage('Stopped all dcmview sessions.');
     }),
+    vscode.window.registerCustomEditorProvider(
+      DICOM_CUSTOM_EDITOR_VIEW_TYPE,
+      new DicomCustomEditorProvider(context),
+    ),
     vscode.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration('dcmview')) {
         void configureTerminalInterception(context);
@@ -277,27 +322,67 @@ async function startSession(
   settings: ExtensionSettings,
   output: vscode.OutputChannel,
 ): Promise<RunningSession> {
+  const panel = vscode.window.createWebviewPanel('dcmview.viewer', title, vscode.ViewColumn.Beside, {
+    enableScripts: true,
+    localResourceRoots: [context.extensionUri],
+  });
+  try {
+    return await startSessionInPanel(binary, args, cwd, title, settings, output, panel);
+  } catch (error) {
+    panel.dispose();
+    throw error;
+  }
+}
+
+async function startSessionInPanel(
+  binary: string,
+  args: readonly string[],
+  cwd: string,
+  title: string,
+  settings: ExtensionSettings,
+  output: vscode.OutputChannel,
+  panel: vscode.WebviewPanel,
+): Promise<RunningSession> {
   output.appendLine(`Launching: ${binary} ${args.map(shellQuote).join(' ')}`);
 
   const child = childProcess.spawn(binary, args, {
     cwd,
     env: { ...process.env, [BRIDGE_BYPASS_ENV]: '1' },
   });
-  const serverUrl = await waitForStartupOrTerminate(
-    child,
-    settings.startupTimeoutSeconds * 1000,
-    output,
-  );
-  let panel: vscode.WebviewPanel;
-  try {
-    const externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(serverUrl));
+  let session: RunningSession | undefined;
+  let panelDisposed = false;
+  const panelDisposeListener = panel.onDidDispose(() => {
+    if (session) {
+      void stopSession(session, false);
+      return;
+    }
+    panelDisposed = true;
+    child.kill('SIGINT');
+  });
 
-    panel = vscode.window.createWebviewPanel('dcmview.viewer', title, vscode.ViewColumn.Beside, {
-      enableScripts: true,
-      localResourceRoots: [context.extensionUri],
-    });
+  let serverUrl: string;
+  try {
+    serverUrl = await waitForStartupOrTerminate(
+      child,
+      settings.startupTimeoutSeconds * 1000,
+      output,
+    );
+  } catch (error) {
+    panelDisposeListener.dispose();
+    throw error;
+  }
+
+  try {
+    if (panelDisposed) {
+      throw new Error('dcmview panel closed before startup completed.');
+    }
+    const externalUri = await vscode.env.asExternalUri(vscode.Uri.parse(serverUrl));
+    if (panelDisposed) {
+      throw new Error('dcmview panel closed before startup completed.');
+    }
     panel.webview.html = webviewHtml(panel.webview, externalUri);
   } catch (error) {
+    panelDisposeListener.dispose();
     child.kill('SIGINT');
     throw error;
   }
@@ -306,7 +391,7 @@ async function startSession(
   const exitCode = new Promise<number>((resolve) => {
     resolveExitCode = resolve;
   });
-  const session: RunningSession = {
+  session = {
     id: crypto.randomUUID(),
     panel,
     process: child,
@@ -319,15 +404,13 @@ async function startSession(
 
   child.once('exit', (code, signal) => {
     output.appendLine(`dcmview exited (${title}): code=${code ?? 'null'} signal=${signal ?? 'null'}`);
+    panelDisposeListener.dispose();
     sessions.delete(session);
     sessionsById.delete(session.id);
     resolveExitCode(Number(code ?? 0));
     if (!session.stopped) {
       panel.dispose();
     }
-  });
-  panel.onDidDispose(() => {
-    void stopSession(session, false);
   });
 
   sessions.add(session);
@@ -350,6 +433,24 @@ async function startPathSession(
     sessionTitle(filePaths),
     settings,
     output,
+  );
+}
+
+async function startPathSessionInPanel(
+  binary: string,
+  filePaths: readonly string[],
+  settings: ExtensionSettings,
+  output: vscode.OutputChannel,
+  panel: vscode.WebviewPanel,
+): Promise<RunningSession> {
+  return startSessionInPanel(
+    binary,
+    buildDcmviewArgs(filePaths, settings),
+    commonWorkingDirectory(filePaths),
+    sessionTitle(filePaths),
+    settings,
+    output,
+    panel,
   );
 }
 

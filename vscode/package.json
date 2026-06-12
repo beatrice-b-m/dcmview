@@ -41,7 +41,8 @@
     "onStartupFinished",
     "onCommand:dcmview.openPath",
     "onCommand:dcmview.openWorkspaceSelection",
-    "onCommand:dcmview.stopAll"
+    "onCommand:dcmview.stopAll",
+    "onCustomEditor:dcmview.dicomViewer"
   ],
   "contributes": {
     "commands": [
@@ -69,6 +70,24 @@
         }
       ]
     },
+    "customEditors": [
+      {
+        "viewType": "dcmview.dicomViewer",
+        "displayName": "dcmview",
+        "selector": [
+          {
+            "filenamePattern": "*.dcm"
+          },
+          {
+            "filenamePattern": "*.dicom"
+          },
+          {
+            "filenamePattern": "*.ima"
+          }
+        ],
+        "priority": "option"
+      }
+    ],
     "configuration": {
       "title": "dcmview",
       "properties": {

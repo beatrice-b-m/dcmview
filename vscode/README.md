@@ -29,6 +29,12 @@ Use the Explorer context menu command `Open with dcmview` on DICOM files or
 folders. The extension launches `dcmview --no-browser --port 0`, waits for the
 local server URL, and opens the viewer beside your current editor.
 
+For files named `*.dcm`, `*.dicom`, or `*.ima`, use VS Code's `Reopen With...`
+command and choose `dcmview` to open the file in a readonly dcmview editor tab.
+Set `dcmview` as the default editor for those patterns if you want double-clicks
+to open matching DICOM files directly in dcmview. Extensionless DICOM files and
+folders should still use the Explorer context menu command.
+
 The command `dcmview: Open Workspace with dcmview` opens a selected workspace
 folder. The command `dcmview: Stop All dcmview Sessions` terminates extension
 managed viewer sessions.
