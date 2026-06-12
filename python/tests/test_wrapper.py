@@ -455,6 +455,33 @@ class WrapperTests(unittest.TestCase):
 		self.assertFalse(launch_payload["wait"])
 		self.assertEqual(launch_payload["binaryPath"], "/tmp/dcmview")
 
+	def test_view_omits_bridge_binary_path_when_resolution_fails(self) -> None:
+		with mock.patch.dict(
+			os.environ,
+			{
+				"DCMVIEW_VSCODE_BRIDGE_URL": "http://127.0.0.1:4567",
+				"DCMVIEW_VSCODE_BRIDGE_TOKEN": "secret",
+			},
+			clear=True,
+		):
+			with mock.patch(
+				"dcmview_py.wrapper._bridge_json_request",
+				side_effect=[
+					{"sessionId": "abc", "url": "http://127.0.0.1:9999"},
+					{"exitCode": 0},
+				],
+			) as bridge_mock:
+				with mock.patch("dcmview_py.wrapper._resolve_binary", side_effect=RuntimeError("not found")):
+					with mock.patch("dcmview_py.wrapper.subprocess.Popen") as popen_mock:
+						with redirect_stdout(StringIO()):
+							result = wrapper.view([FIXTURE_FILE], browser=True, block=True)
+
+		self.assertIsNone(result)
+		popen_mock.assert_not_called()
+		launch_payload = bridge_mock.call_args_list[0].args[2]
+		self.assertEqual(launch_payload["program"], "dcmview_py")
+		self.assertNotIn("binaryPath", launch_payload)
+
 	def test_bridge_json_request_matches_shared_launch_fixture(self) -> None:
 		fixture = json.loads(BRIDGE_CONTRACT.read_text(encoding="utf-8"))
 		launch = fixture["launch"]

@@ -253,8 +253,11 @@ def _view_via_vscode_bridge(
 		"args": args,
 		"cwd": os.getcwd(),
 		"wait": False,
-		"binaryPath": _resolve_binary(),
 	}
+	try:
+		payload["binaryPath"] = _resolve_binary()
+	except RuntimeError:
+		_bridge_debug("omitting bridge binaryPath because local binary resolution failed")
 	response: dict[str, object] | None = None
 	endpoint: BridgeEndpoint | None = None
 	last_error: BaseException | None = None
@@ -266,8 +269,6 @@ def _view_via_vscode_bridge(
 			endpoint = candidate
 			_bridge_debug(f"selected endpoint {candidate[0]}")
 			break
-		except urllib.error.HTTPError as error:
-			last_error = error
 		except (OSError, urllib.error.URLError, RuntimeError) as error:
 			if isinstance(error, urllib.error.URLError) and candidate in registry_endpoints:
 				_remove_bridge_registry_endpoint(candidate)
