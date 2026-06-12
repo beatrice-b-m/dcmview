@@ -46,6 +46,7 @@
 		onopenfile: (index: number) => void;
 	} = $props();
 
+	const LARGE_TREE_COLLAPSE_THRESHOLD = 500;
 	let collapsedNodes = $state<Record<string, boolean>>({});
 
 	function clean(value: string | null | undefined): string {
@@ -77,8 +78,20 @@
 		return `${prefix}:${value}`;
 	}
 
+	function numericValue(value: string): number | null {
+		const parsed = Number.parseFloat(clean(value));
+		return Number.isFinite(parsed) ? parsed : null;
+	}
+
+	function defaultCollapsed(key: string): boolean {
+		if (files.length <= LARGE_TREE_COLLAPSE_THRESHOLD || tree.length <= 1) {
+			return false;
+		}
+		return key.startsWith("patient:") || key.includes("/study:");
+	}
+
 	function isCollapsed(key: string): boolean {
-		return collapsedNodes[key] ?? false;
+		return collapsedNodes[key] ?? defaultCollapsed(key);
 	}
 
 	function toggleNode(key: string) {
@@ -209,8 +222,10 @@
 
 	const tree = $derived.by(() => {
 		const patients = new Map<string, NavPatient>();
+		const studies = new Map<string, NavStudy>();
+		const seriesByKey = new Map<string, NavSeries>();
 
-		for (const file of [...files].sort((left, right) => left.index - right.index)) {
+		for (const file of files) {
 			const patientKey = nodeKey("patient", `file-${file.index}`, [file.patient_id, file.patient_name]);
 			let patient = patients.get(patientKey);
 			if (!patient) {
@@ -225,7 +240,7 @@
 			}
 
 			const studyKey = `${patientKey}/${nodeKey("study", `file-${file.index}`, [file.study_instance_uid, file.study_description, file.study_date])}`;
-			let study = patient.studies.find((item) => item.key === studyKey);
+			let study = studies.get(studyKey);
 			if (!study) {
 				study = {
 					kind: "study",
@@ -235,10 +250,11 @@
 					series: [],
 				};
 				patient.studies.push(study);
+				studies.set(studyKey, study);
 			}
 
 			const seriesKey = `${studyKey}/${nodeKey("series", `file-${file.index}`, [file.series_instance_uid, file.series_number, file.series_description])}`;
-			let series = study.series.find((item) => item.key === seriesKey);
+			let series = seriesByKey.get(seriesKey);
 			if (!series) {
 				series = {
 					kind: "series",
@@ -248,6 +264,7 @@
 					files: [],
 				};
 				study.series.push(series);
+				seriesByKey.set(seriesKey, series);
 			}
 
 			series.files.push({
@@ -255,6 +272,19 @@
 				file,
 				label: fileLabel(file),
 				detail: fileDetail(file),
+			});
+		}
+
+		for (const series of seriesByKey.values()) {
+			series.files.sort((left, right) => {
+				const leftInstance = numericValue(left.file.instance_number);
+				const rightInstance = numericValue(right.file.instance_number);
+				if (leftInstance !== null && rightInstance !== null && leftInstance !== rightInstance) {
+					return leftInstance - rightInstance;
+				}
+				if (leftInstance !== null && rightInstance === null) return -1;
+				if (leftInstance === null && rightInstance !== null) return 1;
+				return left.file.index - right.file.index;
 			});
 		}
 
