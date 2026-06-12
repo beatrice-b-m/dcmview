@@ -133,7 +133,13 @@ async fn file_registry_serves_snapshots_while_scan_is_incomplete() {
 
     let initial_files: Value = test_server.get("/api/files").await.json();
     assert_eq!(initial_files["scan_complete"], false);
-    assert_eq!(initial_files["files"].as_array().expect("files array").len(), 0);
+    assert_eq!(
+        initial_files["files"]
+            .as_array()
+            .expect("files array")
+            .len(),
+        0
+    );
 
     let mut entry = support::file_entry(path, "1.2.840.10008.1.2.1", 1);
     entry.rows = 2;

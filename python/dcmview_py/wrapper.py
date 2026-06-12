@@ -169,12 +169,14 @@ def view(
 	recursive: bool = True,
 	timeout: Optional[int] = None,
 	annotations: Optional[PathInput] = None,
+	filters: Optional[Iterable[str]] = None,
 	vscode_bridge: bool = True,
 ) -> Optional[ShutdownHandle | BridgeShutdownHandle]:
 	"""Launch dcmview for one or more filesystem paths."""
 
 	paths = _normalize_files(files)
 	annotation_path = _normalize_optional_path(annotations, field_name="annotations")
+	filter_args = _normalize_filters(filters)
 	args = _build_args(
 		paths,
 		port=port,
@@ -186,6 +188,7 @@ def view(
 		recursive=recursive,
 		timeout=timeout,
 		annotations=annotation_path,
+		filters=filter_args,
 	)
 	bridge_endpoints = _bridge_endpoints() if vscode_bridge else []
 	if bridge_endpoints:
@@ -209,6 +212,7 @@ def view(
 			recursive=recursive,
 			timeout=timeout,
 			annotations=annotation_path,
+			filters=filter_args,
 			include_startup_json=include_startup_json,
 		)
 
@@ -306,6 +310,17 @@ def _normalize_optional_path(path: Optional[PathInput], *, field_name: str) -> O
 	return str(Path(path))
 
 
+def _normalize_filters(filters: Optional[Iterable[str]]) -> list[str]:
+	if filters is None:
+		return []
+	normalized: list[str] = []
+	for value in filters:
+		if not isinstance(value, str):
+			raise TypeError("filters must contain FIELD=VALUE strings")
+		normalized.append(value)
+	return normalized
+
+
 def _build_command(
 	paths: list[str],
 	*,
@@ -318,6 +333,7 @@ def _build_command(
 	recursive: bool,
 	timeout: Optional[int],
 	annotations: Optional[str],
+	filters: Optional[Iterable[str]] = None,
 	include_startup_json: bool = True,
 ) -> list[str]:
 	return [
@@ -333,6 +349,7 @@ def _build_command(
 			recursive=recursive,
 			timeout=timeout,
 			annotations=annotations,
+			filters=filters,
 			include_startup_json=include_startup_json,
 		),
 	]
@@ -350,6 +367,7 @@ def _build_args(
 	recursive: bool,
 	timeout: Optional[int],
 	annotations: Optional[str],
+	filters: Optional[Iterable[str]] = None,
 	include_startup_json: bool = True,
 ) -> list[str]:
 	if tunnel and not tunnel_host:
@@ -369,6 +387,8 @@ def _build_args(
 		command.append("--no-recursive")
 	if annotations is not None:
 		command.extend(["--annotations", annotations])
+	for filter_value in _normalize_filters(filters):
+		command.extend(["--filter", filter_value])
 	command.extend(paths)
 	return command
 

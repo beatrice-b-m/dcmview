@@ -54,6 +54,9 @@ struct Cli {
     #[arg(long = "annotations")]
     annotations: Option<PathBuf>,
 
+    #[arg(long = "filter", value_name = "FIELD=VALUE", value_parser = parse_scan_filter)]
+    filters: Vec<loader::ScanFilter>,
+
     #[arg(long = "startup-json")]
     startup_json: bool,
 
@@ -119,6 +122,10 @@ enum BridgeLaunchError {
 enum RegistryMatch {
     AllowAny,
     RequireWorkspace,
+}
+
+fn parse_scan_filter(raw: &str) -> std::result::Result<loader::ScanFilter, String> {
+    raw.parse()
 }
 
 #[tokio::main]
@@ -196,6 +203,7 @@ async fn run() -> Result<i32> {
     spawn_progressive_discovery(
         cli.paths.clone(),
         !cli.no_recursive,
+        cli.filters.clone(),
         cli.annotations.clone(),
         registry,
         annotation_store,
@@ -623,6 +631,7 @@ fn fallback_to_local_viewer(args: &[String]) -> Result<i32> {
 fn spawn_progressive_discovery(
     input_paths: Vec<PathBuf>,
     recursive: bool,
+    filters: Vec<loader::ScanFilter>,
     annotations_path: Option<PathBuf>,
     registry: server::FileRegistry,
     annotation_store: annotations::AnnotationStore,
@@ -632,10 +641,11 @@ fn spawn_progressive_discovery(
     tokio::spawn(async move {
         let (events_tx, mut events_rx) = mpsc::unbounded_channel();
         let scan_paths = input_paths.clone();
+        let filters_for_message = filters.clone();
         let scan = tokio::spawn(async move {
             loader::discover_progressive(
                 &scan_paths,
-                loader::DiscoverOptions { recursive },
+                loader::DiscoverOptions { recursive, filters },
                 events_tx,
             )
             .await
@@ -650,6 +660,7 @@ fn spawn_progressive_discovery(
                 loader::DiscoveryEvent::Skipped => {
                     registry.record_skipped();
                 }
+                loader::DiscoveryEvent::Filtered => {}
             }
         }
 
@@ -663,7 +674,14 @@ fn spawn_progressive_discovery(
             Ok(report) => {
                 let files = registry.files_snapshot();
                 if files.is_empty() {
-                    eprintln!("dcmview: no valid DICOM files found");
+                    if report.filtered > 0 {
+                        eprintln!(
+                            "dcmview: no DICOM files matched active filters ({})",
+                            format_scan_filters(&filters_for_message)
+                        );
+                    } else {
+                        eprintln!("dcmview: no valid DICOM files found");
+                    }
                     exit_code.store(1, Ordering::Relaxed);
                     shutdown_notify.notify_one();
                     return;
@@ -694,7 +712,9 @@ fn spawn_progressive_discovery(
                 print_progressive_load_summary(
                     files.len(),
                     report.skipped,
+                    report.filtered,
                     report.searched_recursive,
+                    &filters_for_message,
                     &input_paths,
                 );
             }
@@ -710,7 +730,9 @@ fn spawn_progressive_discovery(
 fn print_progressive_load_summary(
     file_count: usize,
     skipped: usize,
+    filtered: usize,
     searched_recursive: bool,
+    filters: &[loader::ScanFilter],
     input_paths: &[PathBuf],
 ) {
     let recursive_note = if searched_recursive {
@@ -724,26 +746,35 @@ fn print_progressive_load_summary(
         format!("{} path(s)", input_paths.len())
     };
 
-    if skipped == 0 {
-        if file_count == 1 {
-            println!("dcmview: loaded 1 DICOM file");
-        } else {
-            println!(
-                "dcmview: loaded {} DICOM file(s) from {} ({})",
-                file_count,
-                path_label,
-                recursive_note
-            );
-        }
+    let mut notes = Vec::new();
+    if skipped > 0 {
+        notes.push(format!("{skipped} skipped — not valid DICOM"));
+    }
+    if filtered > 0 {
+        notes.push(format!("{filtered} filtered"));
+    }
+    if !filters.is_empty() {
+        notes.push(format!("filters: {}", format_scan_filters(filters)));
+    }
+    notes.push(recursive_note.to_string());
+    let note = notes.join(", ");
+
+    if file_count == 1 && skipped == 0 && filtered == 0 && filters.is_empty() {
+        println!("dcmview: loaded 1 DICOM file");
     } else {
         println!(
-            "dcmview: loaded {} DICOM file(s) from {} ({} skipped — not valid DICOM, {})",
-            file_count,
-            path_label,
-            skipped,
-            recursive_note
+            "dcmview: loaded {} DICOM file(s) from {} ({})",
+            file_count, path_label, note
         );
     }
+}
+
+fn format_scan_filters(filters: &[loader::ScanFilter]) -> String {
+    filters
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 #[cfg(test)]

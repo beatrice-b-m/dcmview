@@ -38,6 +38,7 @@ def _build_parser() -> argparse.ArgumentParser:
 	parser.add_argument("--timeout", type=int)
 	parser.add_argument("--no-recursive", action="store_true")
 	parser.add_argument("--annotations")
+	parser.add_argument("--filter", action="append", default=[])
 	return parser
 
 
@@ -46,19 +47,21 @@ def run_cli(argv: Optional[Sequence[str]] = None) -> int:
 	args = parser.parse_args(argv)
 
 	try:
-		view(
-			args.paths,
-			port=args.port,
-			host=args.host,
-			browser=not args.no_browser,
-			tunnel=args.tunnel,
-			tunnel_host=args.tunnel_host,
-			tunnel_port=args.tunnel_port,
-			recursive=not args.no_recursive,
-			timeout=args.timeout,
-			annotations=args.annotations,
-			block=True,
-		)
+		view_kwargs = {
+			"port": args.port,
+			"host": args.host,
+			"browser": not args.no_browser,
+			"tunnel": args.tunnel,
+			"tunnel_host": args.tunnel_host,
+			"tunnel_port": args.tunnel_port,
+			"recursive": not args.no_recursive,
+			"timeout": args.timeout,
+			"annotations": args.annotations,
+			"block": True,
+		}
+		if args.filter:
+			view_kwargs["filters"] = args.filter
+		view(args.paths, **view_kwargs)
 	except subprocess.CalledProcessError as error:
 		return int(error.returncode)
 	except (RuntimeError, ValueError, TypeError) as error:

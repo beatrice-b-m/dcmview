@@ -274,6 +274,32 @@ class WrapperTests(unittest.TestCase):
 			block=True,
 		)
 
+	def test_cli_forwards_filter_flags(self) -> None:
+		with mock.patch("dcmview_py.__main__.view", return_value=None) as view_mock:
+			exit_code = dcmview_main.run_cli([
+				"--filter",
+				"modality=MR",
+				"--filter",
+				"patient_id=123",
+				str(FIXTURE_FILE),
+			])
+
+		self.assertEqual(exit_code, 0)
+		view_mock.assert_called_once_with(
+			[str(FIXTURE_FILE)],
+			port=0,
+			host="127.0.0.1",
+			browser=True,
+			tunnel=False,
+			tunnel_host=None,
+			tunnel_port=0,
+			recursive=True,
+			timeout=None,
+			annotations=None,
+			block=True,
+			filters=["modality=MR", "patient_id=123"],
+		)
+
 	def test_build_command_includes_annotations_flag_when_provided(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
 			command = wrapper._build_command(
@@ -292,6 +318,28 @@ class WrapperTests(unittest.TestCase):
 		self.assertIn("--annotations", command)
 		flag_index = command.index("--annotations")
 		self.assertEqual(command[flag_index + 1], "/tmp/annotations.csv")
+
+	def test_build_command_includes_filter_flags_when_provided(self) -> None:
+		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):
+			command = wrapper._build_command(
+				["/tmp/scan.dcm"],
+				port=0,
+				host="127.0.0.1",
+				browser=True,
+				tunnel=False,
+				tunnel_host=None,
+				tunnel_port=0,
+				recursive=True,
+				timeout=None,
+				annotations=None,
+				filters=["modality=MR", "patient_id=123"],
+			)
+
+		self.assertIn("--filter", command)
+		self.assertEqual(
+			command[command.index("--filter") : command.index("/tmp/scan.dcm")],
+			["--filter", "modality=MR", "--filter", "patient_id=123"],
+		)
 
 	def test_build_command_requests_structured_startup_event(self) -> None:
 		with mock.patch("dcmview_py.wrapper.shutil.which", return_value="/tmp/dcmview"):

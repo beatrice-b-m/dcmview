@@ -6,6 +6,13 @@ use std::fs;
 use std::path::Path;
 use tempfile::tempdir;
 
+fn discover_options(recursive: bool) -> DiscoverOptions {
+    DiscoverOptions {
+        recursive,
+        filters: Vec::new(),
+    }
+}
+
 #[tokio::test]
 async fn discovers_valid_files_and_tracks_skips() {
     let dir = tempdir().expect("temp dir");
@@ -20,12 +27,9 @@ async fn discovers_valid_files_and_tracks_skips() {
     write_test_dicom(&second, "P2", "MR", "20260102", 4, false);
     fs::write(&invalid, b"not a dicom file").expect("invalid file");
 
-    let report = loader::discover(
-        &[dir.path().to_path_buf()],
-        DiscoverOptions { recursive: true },
-    )
-    .await
-    .expect("discovery should succeed");
+    let report = loader::discover(&[dir.path().to_path_buf()], discover_options(true))
+        .await
+        .expect("discovery should succeed");
 
     assert_eq!(report.files.len(), 2, "expected both DICOM files");
     assert_eq!(report.skipped, 1, "expected one skipped non-DICOM file");
@@ -52,12 +56,9 @@ async fn respects_no_recursive_for_directory_inputs() {
     write_test_dicom(&top, "TOP", "CT", "20260101", 2, true);
     write_test_dicom(&nested_file, "NESTED", "CT", "20260101", 2, true);
 
-    let report = loader::discover(
-        &[dir.path().to_path_buf()],
-        DiscoverOptions { recursive: false },
-    )
-    .await
-    .expect("discovery should succeed");
+    let report = loader::discover(&[dir.path().to_path_buf()], discover_options(false))
+        .await
+        .expect("discovery should succeed");
 
     assert_eq!(report.files.len(), 1, "nested file must be excluded");
     assert_eq!(report.files[0].path, top);
@@ -70,17 +71,93 @@ async fn errors_when_no_valid_files_found() {
     let invalid = dir.path().join("invalid.txt");
     fs::write(&invalid, b"plain text").expect("invalid file");
 
-    let error = loader::discover(
-        &[dir.path().to_path_buf()],
-        DiscoverOptions { recursive: true },
-    )
-    .await
-    .expect_err("loader should fail when no DICOM files exist");
+    let error = loader::discover(&[dir.path().to_path_buf()], discover_options(true))
+        .await
+        .expect_err("loader should fail when no DICOM files exist");
 
     assert!(
         error.to_string().contains("no valid DICOM files"),
         "error should explain why startup fails"
     );
+}
+
+#[tokio::test]
+async fn filters_matching_subset_by_metadata_field() {
+    let dir = tempdir().expect("temp dir");
+    let ct = dir.path().join("ct.dcm");
+    let mr = dir.path().join("mr.dcm");
+    write_test_dicom(&ct, "PAT-CT", "CT", "20260101", 1, true);
+    write_test_dicom(&mr, "PAT-MR", "MR", "20260102", 1, true);
+
+    let report = loader::discover(
+        &[dir.path().to_path_buf()],
+        DiscoverOptions {
+            recursive: true,
+            filters: vec!["modality=MR".parse().expect("filter parses")],
+        },
+    )
+    .await
+    .expect("filtered discovery should succeed");
+
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].patient_id, "PAT-MR");
+    assert_eq!(report.filtered, 1);
+}
+
+#[tokio::test]
+async fn filters_and_multiple_terms_together() {
+    let dir = tempdir().expect("temp dir");
+    let first = dir.path().join("first.dcm");
+    let second = dir.path().join("second.dcm");
+    write_test_dicom(&first, "PAT-001", "MR", "20260101", 1, true);
+    write_test_dicom(&second, "PAT-002", "MR", "20260102", 1, true);
+
+    let report = loader::discover(
+        &[dir.path().to_path_buf()],
+        DiscoverOptions {
+            recursive: true,
+            filters: vec![
+                "modality=mr".parse().expect("modality filter parses"),
+                "patient_id=002".parse().expect("patient filter parses"),
+            ],
+        },
+    )
+    .await
+    .expect("filtered discovery should succeed");
+
+    assert_eq!(report.files.len(), 1);
+    assert_eq!(report.files[0].patient_id, "PAT-002");
+    assert_eq!(report.filtered, 1);
+}
+
+#[tokio::test]
+async fn filters_matching_nothing_error_after_valid_files_are_filtered() {
+    let dir = tempdir().expect("temp dir");
+    let path = dir.path().join("ct.dcm");
+    write_test_dicom(&path, "PAT-CT", "CT", "20260101", 1, true);
+
+    let error = loader::discover(
+        &[dir.path().to_path_buf()],
+        DiscoverOptions {
+            recursive: true,
+            filters: vec!["modality=MR".parse().expect("filter parses")],
+        },
+    )
+    .await
+    .expect_err("all-filtered discovery should fail");
+
+    assert!(error.to_string().contains("no valid DICOM files"));
+}
+
+#[test]
+fn rejects_unknown_filter_field() {
+    let error = "unknown=value"
+        .parse::<loader::ScanFilter>()
+        .expect_err("unknown fields should be rejected");
+
+    assert!(error.contains("FIELD is one of"));
+    assert!(error.contains("patient_id"));
+    assert!(error.contains("modality"));
 }
 
 fn write_test_dicom(

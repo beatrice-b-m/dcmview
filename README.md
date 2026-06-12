@@ -229,6 +229,7 @@ dcmview [OPTIONS] <PATH> [PATH ...]
 | `--no-browser` | false | Do not open the browser automatically |
 | `--timeout <seconds>` | none | Exit after this many seconds without API/browser requests |
 | `--no-recursive` | false | Scan only the top level of input directories |
+| `--filter <FIELD=VALUE>` | none | Include only DICOM files whose metadata field contains the value; repeatable |
 | `--tunnel` | false | Start an SSH local port-forward helper |
 | `--tunnel-host <host>` | none | SSH target used with `--tunnel` |
 | `--tunnel-port <u16>` | `0` | Forwarded local port; `0` uses the server port |
@@ -242,7 +243,13 @@ dcmview --no-recursive ./study_dir
 dcmview --host 127.0.0.1 --port 8888 --no-browser ./study_dir
 dcmview --timeout 300 ./study_dir
 dcmview --annotations ./embed_annotations.csv ./study_dir
+dcmview --filter modality=MR --filter patient_id=1234 ./archive_dir
 ```
+
+Filter fields are `patient_id`, `patient_name`, `study_description`,
+`study_date`, `study_uid`, `series_description`, `series_number`,
+`series_uid`, and `modality`. Matching is case-insensitive substring matching;
+multiple filters are combined with AND semantics.
 
 ## HTTP API
 

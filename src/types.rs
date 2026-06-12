@@ -229,6 +229,7 @@ fn is_false(value: &bool) -> bool {
 pub struct LoadReport {
     pub files: Vec<FileEntry>,
     pub skipped: usize,
+    pub filtered: usize,
     pub searched_recursive: bool,
 }
 

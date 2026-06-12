@@ -17,9 +17,15 @@ use super::support;
 #[ignore = "downloads and caches data with dicom-test-files; run explicitly when network or cache is available"]
 async fn loads_remote_dicom_test_file_through_loader_and_http_contracts() {
     let path = dicom_test_files::path("pydicom/liver.dcm").expect("fetch dicom-test-files fixture");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover remote fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover remote fixture");
 
     assert_eq!(report.files.len(), 1);
     assert_eq!(report.skipped, 0);
@@ -56,9 +62,15 @@ async fn loads_remote_dicom_test_file_through_loader_and_http_contracts() {
 async fn decodes_remote_jpeg2000_fixture_through_display_endpoint() {
     let path = dicom_test_files::path("pydicom/MR_small_jp2klossless.dcm")
         .expect("fetch dicom-test-files jpeg2000 fixture");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover remote jpeg2000 fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover remote jpeg2000 fixture");
 
     assert_eq!(report.files.len(), 1);
     assert!(report.files[0].has_pixels);

@@ -58,9 +58,15 @@ fn assert_pixels_close(actual: &[u8], expected: &[u8], tolerance: u8) {
 #[tokio::test]
 async fn golden_uncompressed_fixture_matches_raw_and_display_contracts() {
     let path = fixture_path("golden-uncompressed-u16-multiframe.dcm");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover uncompressed golden fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover uncompressed golden fixture");
     assert_eq!(report.files.len(), 1);
 
     let file = &report.files[0];
@@ -105,9 +111,15 @@ async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
         .to_luma8()
         .into_raw();
 
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover JPEG fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover JPEG fixture");
     let expected_samples = expected
         .iter()
         .map(|value| f64::from(*value))
@@ -138,9 +150,15 @@ async fn golden_single_frame_jpeg_fixture_round_trips_server_decode() {
 #[tokio::test]
 async fn golden_large_single_frame_jpeg_fixture_exercises_viewer_geometry() {
     let path = fixture_path("golden-jpeg-baseline-large-single-frame.dcm");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover large JPEG fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover large JPEG fixture");
     assert_eq!(report.files.len(), 1);
 
     let file = &report.files[0];
@@ -180,9 +198,15 @@ async fn golden_multiframe_jpeg_fixture_has_offset_table_and_decodes_by_frame() 
         .to_luma8()
         .into_raw();
 
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover multiframe jpeg fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover multiframe jpeg fixture");
     let test_server = TestServer::new(server::router(support::app_state(report.files)));
 
     let frame0 = test_server.get("/api/file/0/frame/0").await;
@@ -203,9 +227,15 @@ async fn golden_multiframe_jpeg_fixture_has_offset_table_and_decodes_by_frame() 
 #[tokio::test]
 async fn golden_sr_fixture_reports_no_pixels_and_rejects_frame_access() {
     let path = fixture_path("golden-no-pixels-sr.dcm");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover sr fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover sr fixture");
     assert_eq!(report.files.len(), 1);
     assert!(!report.files[0].has_pixels);
 
@@ -223,9 +253,15 @@ async fn golden_sr_fixture_reports_no_pixels_and_rejects_frame_access() {
 #[tokio::test]
 async fn golden_image_metadata_without_pixel_data_reports_no_pixels() {
     let path = fixture_path("golden-image-no-pixels.dcm");
-    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
-        .await
-        .expect("discover image metadata without pixels fixture");
+    let report = loader::discover(
+        &[path],
+        DiscoverOptions {
+            recursive: false,
+            filters: Vec::new(),
+        },
+    )
+    .await
+    .expect("discover image metadata without pixels fixture");
     assert_eq!(report.files.len(), 1);
 
     let file = &report.files[0];
