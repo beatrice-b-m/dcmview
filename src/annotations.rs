@@ -2,7 +2,7 @@ use crate::types::FileEntry;
 use anyhow::{anyhow, bail, Context, Result};
 use csv::{ReaderBuilder, StringRecord};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -34,13 +34,27 @@ pub type AnnotationIndexMap = HashMap<usize, EmbedRoiAnnotations>;
 
 #[derive(Debug, Clone)]
 pub struct AnnotationStore {
-    inner: Arc<Mutex<AnnotationIndexMap>>,
+    inner: Arc<Mutex<AnnotationStoreInner>>,
+}
+
+#[derive(Debug, Clone)]
+struct AnnotationStoreInner {
+    annotations: AnnotationIndexMap,
+    user_edited: HashSet<usize>,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnotationSource {
+    rows: Vec<ParsedAnnotationRow>,
 }
 
 impl AnnotationStore {
     pub fn new(annotations: AnnotationIndexMap) -> Self {
         Self {
-            inner: Arc::new(Mutex::new(annotations)),
+            inner: Arc::new(Mutex::new(AnnotationStoreInner {
+                annotations,
+                user_edited: HashSet::new(),
+            })),
         }
     }
 
@@ -54,6 +68,7 @@ impl AnnotationStore {
             .lock()
             .map_err(|_| anyhow!("annotations store lock poisoned"))?;
         Ok(annotations
+            .annotations
             .get(&file_index)
             .cloned()
             .unwrap_or_else(EmbedRoiAnnotations::empty))
@@ -64,7 +79,23 @@ impl AnnotationStore {
             .inner
             .lock()
             .map_err(|_| anyhow!("annotations store lock poisoned"))?;
-        *store = annotations;
+        store.annotations = annotations;
+        store.user_edited.clear();
+        Ok(())
+    }
+
+    pub fn insert_csv_if_unedited(
+        &self,
+        file_index: usize,
+        annotations: EmbedRoiAnnotations,
+    ) -> Result<()> {
+        let mut store = self
+            .inner
+            .lock()
+            .map_err(|_| anyhow!("annotations store lock poisoned"))?;
+        if !store.user_edited.contains(&file_index) {
+            store.annotations.insert(file_index, annotations);
+        }
         Ok(())
     }
 
@@ -79,10 +110,11 @@ impl AnnotationStore {
             .inner
             .lock()
             .map_err(|_| anyhow!("annotations store lock poisoned"))?;
+        store.user_edited.insert(file.index);
         if canonical.num_roi == 0 {
-            store.remove(&file.index);
+            store.annotations.remove(&file.index);
         } else {
-            store.insert(file.index, canonical.clone());
+            store.annotations.insert(file.index, canonical.clone());
         }
         Ok(canonical)
     }
@@ -96,7 +128,7 @@ impl AnnotationStore {
         writer.write_record(["anon_dicom_path", "num_ROI", "ROI_coords", "ROI_frames"])?;
 
         for file in files {
-            let Some(annotations) = store.get(&file.index) else {
+            let Some(annotations) = store.annotations.get(&file.index) else {
                 continue;
             };
             if annotations.num_roi == 0 {
@@ -122,24 +154,57 @@ struct ColumnIndexes {
     roi_frames: Option<usize>,
 }
 
+impl AnnotationSource {
+    pub fn from_path(csv_path: &Path) -> Result<Self> {
+        Ok(Self {
+            rows: parse_rows(csv_path)?,
+        })
+    }
+
+    pub fn annotations_for_file(&self, file: &FileEntry) -> Result<Option<EmbedRoiAnnotations>> {
+        let normalized = normalize_path(&file.path);
+        for row in &self.rows {
+            if row.normalized_path == normalized {
+                validate_frames_in_range(&row.annotations, file.frame_count, row.row_number)?;
+                return Ok(Some(row.annotations.clone()));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn load_for_files(&self, files: &[FileEntry]) -> Result<AnnotationIndexMap> {
+        let file_lookup = build_file_lookup(files)?;
+
+        let mut annotations_by_file = HashMap::new();
+        for row in &self.rows {
+            if let Some(file_targets) = file_lookup.get(&row.normalized_path) {
+                for &(file_index, frame_count) in file_targets {
+                    validate_frames_in_range(&row.annotations, frame_count, row.row_number)?;
+                    annotations_by_file.insert(file_index, row.annotations.clone());
+                }
+            }
+        }
+
+        Ok(annotations_by_file)
+    }
+
+    pub fn unmatched_row_count(&self, files: &[FileEntry]) -> usize {
+        let matched_paths: HashSet<String> = files
+            .iter()
+            .map(|file| normalize_path(&file.path))
+            .collect();
+        self.rows
+            .iter()
+            .filter(|row| !matched_paths.contains(&row.normalized_path))
+            .count()
+    }
+}
+
 pub fn load_annotations_for_files(
     csv_path: &Path,
     files: &[FileEntry],
 ) -> Result<AnnotationIndexMap> {
-    let rows = parse_rows(csv_path)?;
-    let file_lookup = build_file_lookup(files)?;
-
-    let mut annotations_by_file = HashMap::new();
-    for row in rows {
-        if let Some(file_targets) = file_lookup.get(&row.normalized_path) {
-            for &(file_index, frame_count) in file_targets {
-                validate_frames_in_range(&row.annotations, frame_count, row.row_number)?;
-                annotations_by_file.insert(file_index, row.annotations.clone());
-            }
-        }
-    }
-
-    Ok(annotations_by_file)
+    AnnotationSource::from_path(csv_path)?.load_for_files(files)
 }
 
 fn parse_rows(csv_path: &Path) -> Result<Vec<ParsedAnnotationRow>> {
@@ -413,7 +478,8 @@ fn normalize_path(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonicalize_annotations, load_annotations_for_files, AnnotationStore, EmbedRoiAnnotations,
+        canonicalize_annotations, load_annotations_for_files, AnnotationSource, AnnotationStore,
+        EmbedRoiAnnotations,
     };
     use crate::types::FileEntry;
     use std::collections::HashMap;
@@ -516,6 +582,34 @@ mod tests {
         let mapped = load_annotations_for_files(&csv_path, &files)
             .expect("annotations should parse without ROI_frames");
         assert_eq!(mapped.get(&0).map(|a| a.roi_frames.clone()), Some(vec![]));
+    }
+
+    #[test]
+    fn parsed_source_matches_single_files_and_counts_unmatched_rows() {
+        let dir = tempdir().expect("temp dir");
+        let csv_path = dir.path().join("annotations.csv");
+        let matched_file = dir.path().join("matched.dcm");
+        let unmatched_file = dir.path().join("unmatched.dcm");
+
+        write_csv(
+            &csv_path,
+            &format!(
+                "anon_dicom_path,num_ROI,ROI_coords,ROI_frames\n{matched},1,\"[[1,2,3,4]]\",\"[[0]]\"\n{unmatched},1,\"[[5,6,7,8]]\",\"[[0]]\"\n",
+                matched = matched_file.display(),
+                unmatched = unmatched_file.display(),
+            ),
+        );
+
+        let source = AnnotationSource::from_path(&csv_path).expect("source parses");
+        let matched = file_entry(0, matched_file.clone(), 1);
+
+        let annotations = source
+            .annotations_for_file(&matched)
+            .expect("single-file match succeeds")
+            .expect("matched annotations");
+
+        assert_eq!(annotations.roi_coords, vec![[1, 2, 3, 4]]);
+        assert_eq!(source.unmatched_row_count(&[matched]), 1);
     }
 
     #[test]
@@ -654,6 +748,38 @@ mod tests {
 
         assert!(csv.contains("anon_dicom_path,num_ROI,ROI_coords,ROI_frames"));
         assert!(csv.contains("/tmp/exported.dcm,1,\"[[1,2,3,4]]\",\"[[1,2]]\""));
+    }
+
+    #[test]
+    fn csv_insert_does_not_overwrite_user_edit() {
+        let mut file = file_entry(0, PathBuf::from("/tmp/edited.dcm"), 3);
+        file.rows = 100;
+        file.columns = 100;
+        let store = AnnotationStore::empty();
+
+        let edited = store
+            .replace_for_file(
+                &file,
+                EmbedRoiAnnotations {
+                    num_roi: 1,
+                    roi_coords: vec![[1, 2, 3, 4]],
+                    roi_frames: vec![vec![0]],
+                },
+            )
+            .expect("edit annotations");
+
+        store
+            .insert_csv_if_unedited(
+                file.index,
+                EmbedRoiAnnotations {
+                    num_roi: 1,
+                    roi_coords: vec![[10, 20, 30, 40]],
+                    roi_frames: vec![vec![1]],
+                },
+            )
+            .expect("csv insert");
+
+        assert_eq!(store.get(file.index).expect("read annotations"), edited);
     }
 
     fn file_entry(index: usize, path: PathBuf, frame_count: u32) -> FileEntry {

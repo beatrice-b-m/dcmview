@@ -184,6 +184,15 @@ async fn run() -> Result<i32> {
 
     let registry = server::FileRegistry::new();
     let annotation_store = annotations::AnnotationStore::empty();
+    let annotation_source = cli
+        .annotations
+        .as_ref()
+        .map(|path| {
+            annotations::AnnotationSource::from_path(path)
+                .with_context(|| format!("failed to load annotations from {}", path.display()))
+                .map(Arc::new)
+        })
+        .transpose()?;
     let shutdown_notify = Arc::new(Notify::new());
     let exit_code = Arc::new(AtomicI32::new(0));
 
@@ -204,7 +213,7 @@ async fn run() -> Result<i32> {
         cli.paths.clone(),
         !cli.no_recursive,
         cli.filters.clone(),
-        cli.annotations.clone(),
+        annotation_source,
         registry,
         annotation_store,
         shutdown_notify.clone(),
@@ -632,7 +641,7 @@ fn spawn_progressive_discovery(
     input_paths: Vec<PathBuf>,
     recursive: bool,
     filters: Vec<loader::ScanFilter>,
-    annotations_path: Option<PathBuf>,
+    annotation_source: Option<Arc<annotations::AnnotationSource>>,
     registry: server::FileRegistry,
     annotation_store: annotations::AnnotationStore,
     shutdown_notify: Arc<Notify>,
@@ -655,7 +664,30 @@ fn spawn_progressive_discovery(
             registry.record_scanned();
             match event {
                 loader::DiscoveryEvent::File(file) => {
-                    registry.insert(file);
+                    let annotations = if let Some(source) = annotation_source.as_ref() {
+                        match source.annotations_for_file(&file) {
+                            Ok(annotations) => annotations,
+                            Err(error) => {
+                                eprintln!("{error:#}");
+                                exit_code.store(1, Ordering::Relaxed);
+                                shutdown_notify.notify_one();
+                                return;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+                    let index = registry.insert(file);
+                    if let Some(annotations) = annotations {
+                        if let Err(error) =
+                            annotation_store.insert_csv_if_unedited(index, annotations)
+                        {
+                            eprintln!("{error:#}");
+                            exit_code.store(1, Ordering::Relaxed);
+                            shutdown_notify.notify_one();
+                            return;
+                        }
+                    }
                 }
                 loader::DiscoveryEvent::Skipped => {
                     registry.record_skipped();
@@ -689,25 +721,12 @@ fn spawn_progressive_discovery(
                     return;
                 }
 
-                if let Some(path) = annotations_path.as_ref() {
-                    match annotations::load_annotations_for_files(path, files.as_slice())
-                        .with_context(|| {
-                            format!("failed to load annotations from {}", path.display())
-                        }) {
-                        Ok(annotations) => {
-                            if let Err(error) = annotation_store.replace_all(annotations) {
-                                eprintln!("{error:#}");
-                                exit_code.store(1, Ordering::Relaxed);
-                                shutdown_notify.notify_one();
-                                return;
-                            }
-                        }
-                        Err(error) => {
-                            eprintln!("{error:#}");
-                            exit_code.store(1, Ordering::Relaxed);
-                            shutdown_notify.notify_one();
-                            return;
-                        }
+                if let Some(source) = annotation_source.as_ref() {
+                    let unmatched = source.unmatched_row_count(files.as_slice());
+                    if unmatched > 0 {
+                        eprintln!(
+                            "dcmview: warning — {unmatched} annotation row(s) did not match discovered DICOM files"
+                        );
                     }
                 }
 
