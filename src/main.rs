@@ -683,14 +683,14 @@ fn vscode_bridge_registry_dir_from_values(
 
     if let Some(state_home) = state_home {
         let state_home = PathBuf::from(state_home);
-        if state_home.is_absolute() {
+        if registry_env_path_is_absolute(&state_home) {
             return state_home.join("dcmview").join("vscode-bridges");
         }
     }
 
     if let Some(home) = home {
         let home = PathBuf::from(home);
-        if home.is_absolute() {
+        if registry_env_path_is_absolute(&home) {
             return home
                 .join(".local")
                 .join("state")
@@ -716,7 +716,7 @@ fn legacy_vscode_bridge_registry_dirs_from_values(
     let mut dirs = Vec::new();
     if let Some(runtime_dir) = runtime_dir {
         let runtime_dir = PathBuf::from(runtime_dir);
-        if runtime_dir.is_absolute() {
+        if registry_env_path_is_absolute(&runtime_dir) {
             dirs.push(runtime_dir.join("dcmview").join("vscode-bridges"));
         }
     }
@@ -727,6 +727,10 @@ fn legacy_vscode_bridge_registry_dirs_from_values(
         safe_registry_segment(user)
     )));
     dirs
+}
+
+fn registry_env_path_is_absolute(path: &Path) -> bool {
+    path.is_absolute() || path.has_root()
 }
 
 fn dedupe_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
