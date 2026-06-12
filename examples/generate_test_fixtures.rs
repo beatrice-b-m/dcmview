@@ -16,6 +16,7 @@ fn main() {
     write_large_jpeg_single_frame(&fixture_dir.join("golden-jpeg-baseline-large-single-frame.dcm"));
     write_jpeg_multiframe_with_bot(&fixture_dir.join("golden-jpeg-baseline-multiframe-bot.dcm"));
     write_sr_without_pixels(&fixture_dir.join("golden-no-pixels-sr.dcm"));
+    write_image_without_pixels(&fixture_dir.join("golden-image-no-pixels.dcm"));
 }
 
 fn write_uncompressed_multiframe(path: &Path) {
@@ -253,6 +254,55 @@ fn write_sr_without_pixels(path: &Path) {
     file_object
         .write_to_file(path)
         .expect("write SR golden fixture");
+}
+
+fn write_image_without_pixels(path: &Path) {
+    let obj = InMemDicomObject::from_element_iter([
+        DataElement::new(tags::SOP_CLASS_UID, VR::UI, uids::CT_IMAGE_STORAGE),
+        DataElement::new(tags::SOP_INSTANCE_UID, VR::UI, "2.25.2000006"),
+        DataElement::new(
+            tags::PATIENT_ID,
+            VR::LO,
+            PrimitiveValue::from("GOLDEN-NO-PIXELS"),
+        ),
+        DataElement::new(tags::MODALITY, VR::CS, PrimitiveValue::from("CT")),
+        DataElement::new(tags::STUDY_DATE, VR::DA, PrimitiveValue::from("20260608")),
+        DataElement::new(tags::ROWS, VR::US, PrimitiveValue::from(16_u16)),
+        DataElement::new(tags::COLUMNS, VR::US, PrimitiveValue::from(16_u16)),
+        DataElement::new(tags::BITS_ALLOCATED, VR::US, PrimitiveValue::from(16_u16)),
+        DataElement::new(tags::BITS_STORED, VR::US, PrimitiveValue::from(16_u16)),
+        DataElement::new(tags::HIGH_BIT, VR::US, PrimitiveValue::from(15_u16)),
+        DataElement::new(
+            tags::PIXEL_REPRESENTATION,
+            VR::US,
+            PrimitiveValue::from(0_u16),
+        ),
+        DataElement::new(tags::SAMPLES_PER_PIXEL, VR::US, PrimitiveValue::from(1_u16)),
+        DataElement::new(
+            tags::PHOTOMETRIC_INTERPRETATION,
+            VR::CS,
+            PrimitiveValue::from("MONOCHROME2"),
+        ),
+        DataElement::new(
+            tags::SERIES_DESCRIPTION,
+            VR::LO,
+            PrimitiveValue::from("Image metadata without pixel data"),
+        ),
+        DataElement::new(tags::INSTANCE_NUMBER, VR::IS, PrimitiveValue::from("1")),
+    ]);
+
+    let file_object = obj
+        .with_meta(
+            FileMetaTableBuilder::new()
+                .transfer_syntax(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+                .media_storage_sop_class_uid(uids::CT_IMAGE_STORAGE)
+                .media_storage_sop_instance_uid("2.25.2000006"),
+        )
+        .expect("build no-pixels image fixture meta");
+
+    file_object
+        .write_to_file(path)
+        .expect("write no-pixels image golden fixture");
 }
 
 fn grayscale_jpeg_fragment_16x16(seed: u8) -> Vec<u8> {

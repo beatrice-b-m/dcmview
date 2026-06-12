@@ -219,3 +219,21 @@ async fn golden_sr_fixture_reports_no_pixels_and_rejects_frame_access() {
     let frame = test_server.get("/api/file/0/frame/0").await;
     assert_eq!(frame.status_code(), StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn golden_image_metadata_without_pixel_data_reports_no_pixels() {
+    let path = fixture_path("golden-image-no-pixels.dcm");
+    let report = loader::discover(&[path], DiscoverOptions { recursive: false })
+        .await
+        .expect("discover image metadata without pixels fixture");
+    assert_eq!(report.files.len(), 1);
+
+    let file = &report.files[0];
+    assert!(!file.has_pixels);
+    assert_eq!(file.rows, 16);
+    assert_eq!(file.columns, 16);
+
+    let test_server = TestServer::new(server::router(support::app_state(report.files)));
+    let frame = test_server.get("/api/file/0/frame/0").await;
+    assert_eq!(frame.status_code(), StatusCode::NOT_FOUND);
+}

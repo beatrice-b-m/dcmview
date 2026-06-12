@@ -1,7 +1,10 @@
 use crate::types::{FileEntry, LoadReport, WindowPreset};
 use anyhow::{anyhow, Context, Result};
-use dicom_object::open_file;
+use dicom_dictionary_std::tags;
+use dicom_object::OpenFileOptions;
 use rayon::prelude::*;
+use std::fs::File;
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use tokio::task;
 use walkdir::WalkDir;
@@ -91,7 +94,14 @@ fn discover_blocking(paths: &[PathBuf], options: &DiscoverOptions) -> Result<Loa
 }
 
 fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
-    let obj = match open_file(path) {
+    if !has_dicm_preamble(path)? {
+        return Ok(None);
+    }
+
+    let obj = match OpenFileOptions::new()
+        .read_until(tags::PIXEL_DATA)
+        .open_file(path)
+    {
         Ok(obj) => obj,
         Err(_) => return Ok(None),
     };
@@ -118,7 +128,7 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         read_str(&obj, "PhotometricInterpretation").unwrap_or_else(|| "MONOCHROME2".to_string());
     let rescale_slope = read_f64(&obj, "RescaleSlope").unwrap_or(1.0);
     let rescale_intercept = read_f64(&obj, "RescaleIntercept").unwrap_or(0.0);
-    let has_pixels = obj.element_by_name("PixelData").is_ok();
+    let has_pixels = has_pixel_data_tag(path, &transfer_syntax_uid)?;
     let default_window = match (
         read_f64(&obj, "WindowCenter"),
         read_f64(&obj, "WindowWidth"),
@@ -162,6 +172,46 @@ fn build_entry(path: &Path) -> Result<Option<FileEntry>> {
         transfer_syntax_uid,
         default_window,
     }))
+}
+
+fn has_dicm_preamble(path: &Path) -> Result<bool> {
+    let mut file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut preamble = [0_u8; 132];
+    match file.read_exact(&mut preamble) {
+        Ok(()) => Ok(&preamble[128..132] == b"DICM"),
+        Err(error) if error.kind() == io::ErrorKind::UnexpectedEof => Ok(false),
+        Err(error) => Err(error).with_context(|| format!("failed to read {}", path.display())),
+    }
+}
+
+fn has_pixel_data_tag(path: &Path, transfer_syntax_uid: &str) -> Result<bool> {
+    let needle: &[u8] = if transfer_syntax_uid == "1.2.840.10008.1.2.2" {
+        &[0x7f, 0xe0, 0x00, 0x10]
+    } else {
+        &[0xe0, 0x7f, 0x10, 0x00]
+    };
+    let mut file = File::open(path).with_context(|| format!("failed to open {}", path.display()))?;
+    let mut carried = Vec::<u8>::new();
+    let mut chunk = [0_u8; 8192];
+
+    loop {
+        let read = file
+            .read(&mut chunk)
+            .with_context(|| format!("failed to read {}", path.display()))?;
+        if read == 0 {
+            return Ok(false);
+        }
+
+        let carry_len = carried.len();
+        carried.extend_from_slice(&chunk[..read]);
+        if carried.windows(needle.len()).any(|window| window == needle) {
+            return Ok(true);
+        }
+
+        let keep = needle.len().saturating_sub(1).min(carried.len());
+        carried.drain(..carried.len().saturating_sub(keep));
+        debug_assert!(carried.len() <= carry_len.max(needle.len().saturating_sub(1)));
+    }
 }
 
 fn read_str(obj: &dicom_object::DefaultDicomObject, name: &str) -> Option<String> {
