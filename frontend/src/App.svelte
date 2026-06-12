@@ -332,9 +332,12 @@
 					pollTimer = window.setTimeout(pollFiles, 500);
 				}
 			} catch (error) {
+				if (cancelled) return;
 				if (!filesResponse) {
 					loadError = error instanceof Error ? error.message : String(error);
+					return;
 				}
+				pollTimer = window.setTimeout(pollFiles, 1000);
 			}
 		};
 

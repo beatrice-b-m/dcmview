@@ -90,13 +90,20 @@
 		if (filterActive) {
 			return false;
 		}
-		if (files.length <= LARGE_TREE_COLLAPSE_THRESHOLD || tree.length <= 1) {
+		const scaleCollapseActive = !scanComplete || files.length > LARGE_TREE_COLLAPSE_THRESHOLD;
+		if (!scaleCollapseActive) {
 			return false;
 		}
-		return key.startsWith("patient:") || key.includes("/study:");
+		if (!key.includes("/")) {
+			return tree.length > 1;
+		}
+		return key.includes("/study:") || key.includes("/series:");
 	}
 
 	function isCollapsed(key: string): boolean {
+		if (filterActive) {
+			return false;
+		}
 		return collapsedNodes[key] ?? defaultCollapsed(key);
 	}
 
@@ -210,10 +217,8 @@
 					file.patient_name,
 					file.study_description,
 					file.study_date,
-					file.study_instance_uid,
 					file.series_description,
 					file.series_number,
-					file.series_instance_uid,
 					file.modality,
 				];
 		}
@@ -223,7 +228,7 @@
 		const trimmed = clean(rawTerm);
 		if (!trimmed) return true;
 
-		const scoped = trimmed.match(/^(patient|study|series|modality):(.+)$/i);
+		const scoped = trimmed.match(/^(patient|study|series|modality):(.*)$/i);
 		const scope = scoped?.[1].toLowerCase() ?? null;
 		const needle = (scoped?.[2] ?? trimmed).trim().toLowerCase();
 		if (!needle) return true;
